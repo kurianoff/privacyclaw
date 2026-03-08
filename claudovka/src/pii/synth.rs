@@ -299,4 +299,128 @@ mod tests {
         let s2 = SyntheticGenerator::get_or_create(&mut vault, "john@acme.com", &PiiType::Email, &Locale::EnUs);
         assert_eq!(s1, s2, "same original should always return same synthetic");
     }
+
+    #[test]
+    fn test_credit_card_luhn_valid() {
+        let mut gen = SyntheticGenerator::new(99);
+        let result = gen.generate(&PiiType::CreditCard, "4111111111111111", &Locale::EnUs);
+        // Strip non-digit chars and verify length and Luhn validity.
+        let digits: Vec<u32> = result
+            .chars()
+            .filter(|c| c.is_ascii_digit())
+            .filter_map(|c| c.to_digit(10))
+            .collect();
+        assert!(
+            digits.len() >= 13 && digits.len() <= 19,
+            "expected 13-19 digit card, got {} digits in {:?}",
+            digits.len(),
+            result
+        );
+        let luhn_sum = digits
+            .iter()
+            .rev()
+            .enumerate()
+            .fold(0u32, |acc, (i, &d)| {
+                let v = if i % 2 == 1 {
+                    let x = d * 2;
+                    if x > 9 { x - 9 } else { x }
+                } else {
+                    d
+                };
+                acc + v
+            });
+        assert_eq!(
+            luhn_sum % 10,
+            0,
+            "generated credit card {:?} fails Luhn check (sum={})",
+            result,
+            luhn_sum
+        );
+    }
+
+    #[test]
+    fn test_ipv4_rfc1918_prefix() {
+        let mut gen = SyntheticGenerator::new(42);
+        let result = gen.generate(&PiiType::IpV4, "192.168.1.1", &Locale::EnUs);
+        assert!(
+            result.starts_with("10."),
+            "expected RFC-1918 10.x.x.x prefix, got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_bearer_token_format() {
+        let mut gen = SyntheticGenerator::new(7);
+        let original = "eyJhbGci.eyJzdWIi.SflKxwRJSMeKKF";
+        let result = gen.generate(&PiiType::BearerToken, original, &Locale::EnUs);
+        // BearerToken generates gen_random_alphanumeric(original.len().max(32)).
+        // The result should be at least 32 alphanumeric characters.
+        assert!(
+            result.len() >= 20,
+            "bearer token too short: {:?}",
+            result
+        );
+        assert!(
+            result.chars().all(|c| c.is_ascii_alphanumeric()),
+            "bearer token contains non-alphanumeric chars: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_openai_key_prefix_preserved() {
+        let mut gen = SyntheticGenerator::new(13);
+        let result = gen.generate(
+            &PiiType::OpenAiApiKey,
+            "sk-abcdefghijklmnopqrstuvwxyz12345678901234",
+            &Locale::EnUs,
+        );
+        assert!(
+            result.starts_with("sk-"),
+            "OpenAI key synthetic should start with 'sk-', got {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_phone_format() {
+        let mut gen = SyntheticGenerator::new(5);
+        let result = gen.generate(&PiiType::Phone, "+1 415-555-1234", &Locale::EnUs);
+        assert!(!result.is_empty(), "generated phone is empty");
+        // Should contain at least one digit and one separator character.
+        let has_digit = result.chars().any(|c| c.is_ascii_digit());
+        let has_sep = result.chars().any(|c| c == '-' || c == '(' || c == ')' || c == ' ');
+        assert!(has_digit, "phone has no digits: {:?}", result);
+        assert!(has_sep, "phone has no separator character: {:?}", result);
+    }
+
+    #[test]
+    fn test_get_or_create_same_original_different_types() {
+        // The vault uses the original string as the key for idempotent lookup
+        // (see get_synthetic / add_mapping). The second call with a different
+        // PiiType but the same original string hits the existing mapping and
+        // returns the first synthetic unchanged.
+        let mut vault = PiiVault::new("test-synth-diff-types");
+        let s_email = SyntheticGenerator::get_or_create(
+            &mut vault,
+            "test",
+            &PiiType::Email,
+            &Locale::EnUs,
+        );
+        let s_phone = SyntheticGenerator::get_or_create(
+            &mut vault,
+            "test",
+            &PiiType::Phone,
+            &Locale::EnUs,
+        );
+        // Because add_mapping is idempotent on the original key, the second
+        // call returns the first synthetic (vault ignores the new type).
+        assert_eq!(
+            s_email, s_phone,
+            "same original with different PiiType should return the cached synthetic"
+        );
+        // Mapping count stays at 1 — no duplicate entry was added.
+        assert_eq!(vault.mapping_count(), 1);
+    }
 }

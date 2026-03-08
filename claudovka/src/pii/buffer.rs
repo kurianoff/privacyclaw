@@ -166,4 +166,117 @@ mod tests {
         let full = format!("{}{}", out, rem);
         assert!(full.contains("John"), "got: {:?}", full);
     }
+
+    #[test]
+    fn test_empty_delta_returns_empty() {
+        // Vault is non-empty so the early-exit branch is not taken.
+        let vault = make_vault_with(&[("real_value", "SYN_ONE")]);
+        let mut buf = ReplacementBuffer::new(vault);
+        let out = buf.process_delta("");
+        assert_eq!(out, "", "empty delta should return empty string, got: {:?}", out);
+    }
+
+    #[test]
+    fn test_no_trigger_char_immediate_flush() {
+        // The synthetic is "ZZZ_TOKEN"; trigger char is 'Z'.
+        // "hello world" contains no 'Z', so the buffer should flush it immediately.
+        let vault = make_vault_with(&[("original_value", "ZZZ_TOKEN")]);
+        let mut buf = ReplacementBuffer::new(vault);
+        let out = buf.process_delta("hello world");
+        // No synthetic in the text, no trigger char in the tail → flush immediately.
+        assert_eq!(out, "hello world", "expected immediate flush without buffering, got: {:?}", out);
+    }
+
+    #[test]
+    fn test_multiple_tokens_in_one_chunk() {
+        let vault = make_vault_with(&[
+            ("original_one", "SynToken1"),
+            ("original_two", "SynToken2"),
+        ]);
+        let mut buf = ReplacementBuffer::new(vault);
+        let chunk = "start SynToken1 middle SynToken2 end";
+        let out = buf.process_delta(chunk);
+        let remaining = buf.flush_remaining();
+        let full = format!("{}{}", out, remaining);
+        assert!(
+            full.contains("original_one"),
+            "first original not restored in: {:?}",
+            full
+        );
+        assert!(
+            full.contains("original_two"),
+            "second original not restored in: {:?}",
+            full
+        );
+        assert!(
+            !full.contains("SynToken1"),
+            "SynToken1 still present in: {:?}",
+            full
+        );
+        assert!(
+            !full.contains("SynToken2"),
+            "SynToken2 still present in: {:?}",
+            full
+        );
+    }
+
+    #[test]
+    fn test_flush_remaining_empty_buffer() {
+        let vault = Arc::new(RwLock::new(PiiVault::new("test")));
+        let mut buf = ReplacementBuffer::new(vault);
+        // flush_remaining on a fresh buffer (no process_delta called) must return "".
+        let result = buf.flush_remaining();
+        assert_eq!(result, "", "flush_remaining on empty buffer should return empty string");
+    }
+
+    #[test]
+    fn test_token_at_very_start() {
+        let vault = make_vault_with(&[("real_value", "SYN_X")]);
+        let mut buf = ReplacementBuffer::new(vault);
+        let out = buf.process_delta("SYN_X is here");
+        let remaining = buf.flush_remaining();
+        let full = format!("{}{}", out, remaining);
+        assert!(
+            full.contains("real_value"),
+            "expected 'real_value' after reversal, got: {:?}",
+            full
+        );
+        assert!(
+            !full.contains("SYN_X"),
+            "synthetic still present in: {:?}",
+            full
+        );
+    }
+
+    #[test]
+    fn test_accumulation_across_many_chunks() {
+        // synthetic="SYN_TOK", original="restored_val"
+        // Full string: "prefix_SYN_TOK_suffix"
+        let vault = make_vault_with(&[("restored_val", "SYN_TOK")]);
+        let mut buf = ReplacementBuffer::new(vault);
+
+        let full_input = "prefix_SYN_TOK_suffix";
+        // Split into single-character chunks.
+        let chars: Vec<&str> = full_input
+            .char_indices()
+            .map(|(i, _)| &full_input[i..i + 1])
+            .collect();
+
+        let mut accumulated = String::new();
+        for ch in &chars {
+            accumulated.push_str(&buf.process_delta(ch));
+        }
+        accumulated.push_str(&buf.flush_remaining());
+
+        assert!(
+            accumulated.contains("restored_val"),
+            "expected 'restored_val' after char-by-char feed, got: {:?}",
+            accumulated
+        );
+        assert!(
+            !accumulated.contains("SYN_TOK"),
+            "synthetic still present after char-by-char feed: {:?}",
+            accumulated
+        );
+    }
 }

@@ -48,75 +48,78 @@ static UNIVERSAL_PATTERNS: OnceLock<Vec<PatternSet>> = OnceLock::new();
 fn universal_patterns() -> &'static Vec<PatternSet> {
     UNIVERSAL_PATTERNS.get_or_init(|| {
         vec![
-            // Email (RFC 5321 simplified)
+            // ── Specific / longer patterns first so they claim spans before
+            //    more-general ones (email, phone) can match sub-spans inside them.
+
+            // Database connection string (must precede email — contains user@host)
             PatternSet::new(
-                PiiType::Email,
-                r"(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}"
+                PiiType::DbConnectionString,
+                r"(?i)(?:postgres|postgresql|mysql|mariadb|mongodb|redis|amqp)://[^:\s]+:[^@\s]+@[^\s]+"
             ),
-            // US Phone — requires at least one separator so bare digit runs (SSNs, card numbers) don't match.
+            // URL with embedded credentials (must precede email — contains user@host)
             PatternSet::new(
-                PiiType::Phone,
-                r"(?:\+1[\s\-.]?)?\(?\d{3}\)?[\s\-.](?:\d{3})[\s\-.](\d{4})"
-            ),
-            // US SSN — avoid matching things that look like dates or serial numbers
-            PatternSet::new(
-                PiiType::Ssn,
-                r"(?<!\d)(?!000|666|9\d\d)\d{3}[-\s](?!00)\d{2}[-\s](?!0000)\d{4}(?!\d)"
-            ),
-            // Credit card — 13–19 digits optionally space/dash separated
-            PatternSet::new(
-                PiiType::CreditCard,
-                r"(?<!\d)(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6011|65\d{2})[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?:\d{3})?(?!\d)"
-            ).with_validator(luhn_valid),
-            // IPv4
-            PatternSet::new(
-                PiiType::IpV4,
-                r"(?<!\d)(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?!\d)"
-            ),
-            // IPv6 (simplified — catches common forms)
-            PatternSet::new(
-                PiiType::IpV6,
-                r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:)*::[0-9a-fA-F:]*"
-            ),
-            // OpenAI API key
-            PatternSet::new(
-                PiiType::OpenAiApiKey,
-                r"sk-[A-Za-z0-9]{20,100}"
-            ),
-            // AWS Access Key ID
-            PatternSet::new(
-                PiiType::AwsAccessKey,
-                r"AKIA[0-9A-Z]{16}"
-            ),
-            // AWS Secret Access Key (appears near "secret" keyword in env blocks)
-            PatternSet::new(
-                PiiType::AwsSecretKey,
-                r#"(?i)aws.{0,20}secret.{0,10}[=:\s]['"]?([A-Za-z0-9/+]{40})"#
-            ),
-            // GitHub PAT (new format ghp_ and github_pat_)
-            PatternSet::new(
-                PiiType::GitHubPat,
-                r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}"
-            ),
-            // Bearer token
-            PatternSet::new(
-                PiiType::BearerToken,
-                r"Bearer [A-Za-z0-9._~+/=\-]{20,}"
+                PiiType::UrlWithCreds,
+                r"https?://[^:\s]+:[^@\s]+@[^\s]+"
             ),
             // SSH private key block
             PatternSet::new(
                 PiiType::SshPrivateKey,
                 r"-----BEGIN (?:RSA|EC|OPENSSH|DSA|PGP) PRIVATE KEY-----"
             ),
-            // Database connection string
+            // Bearer token
             PatternSet::new(
-                PiiType::DbConnectionString,
-                r"(?i)(?:postgres|postgresql|mysql|mariadb|mongodb|redis|amqp)://[^:\s]+:[^@\s]+@[^\s]+"
+                PiiType::BearerToken,
+                r"Bearer [A-Za-z0-9._~+/=\-]{20,}"
             ),
-            // URL with embedded credentials
+            // GitHub PAT (new format ghp_ and github_pat_)
             PatternSet::new(
-                PiiType::UrlWithCreds,
-                r"https?://[^:\s]+:[^@\s]+@[^\s]+"
+                PiiType::GitHubPat,
+                r"ghp_[A-Za-z0-9]{36}|github_pat_[A-Za-z0-9_]{82}"
+            ),
+            // AWS Secret Access Key (appears near "secret" keyword in env blocks)
+            PatternSet::new(
+                PiiType::AwsSecretKey,
+                r#"(?i)aws.{0,20}secret.{0,10}[=:\s]['"]?([A-Za-z0-9/+]{40})"#
+            ),
+            // AWS Access Key ID
+            PatternSet::new(
+                PiiType::AwsAccessKey,
+                r"AKIA[0-9A-Z]{16}"
+            ),
+            // OpenAI API key
+            PatternSet::new(
+                PiiType::OpenAiApiKey,
+                r"sk-[A-Za-z0-9]{20,100}"
+            ),
+            // IPv6 (simplified — catches common forms)
+            PatternSet::new(
+                PiiType::IpV6,
+                r"(?:[0-9a-fA-F]{1,4}:){7}[0-9a-fA-F]{1,4}|(?:[0-9a-fA-F]{1,4}:)*::[0-9a-fA-F:]*"
+            ),
+            // IPv4
+            PatternSet::new(
+                PiiType::IpV4,
+                r"(?<!\d)(?:(?:25[0-5]|2[0-4]\d|[01]?\d\d?)\.){3}(?:25[0-5]|2[0-4]\d|[01]?\d\d?)(?!\d)"
+            ),
+            // Credit card — 13–19 digits optionally space/dash separated
+            PatternSet::new(
+                PiiType::CreditCard,
+                r"(?<!\d)(?:4\d{3}|5[1-5]\d{2}|3[47]\d{2}|6011|65\d{2})[\s\-]?\d{4}[\s\-]?\d{4}[\s\-]?\d{4}(?:\d{3})?(?!\d)"
+            ).with_validator(luhn_valid),
+            // US SSN — avoid matching things that look like dates or serial numbers
+            PatternSet::new(
+                PiiType::Ssn,
+                r"(?<!\d)(?!000|666|9\d\d)\d{3}[-\s](?!00)\d{2}[-\s](?!0000)\d{4}(?!\d)"
+            ),
+            // US Phone — requires at least one separator so bare digit runs don't match.
+            PatternSet::new(
+                PiiType::Phone,
+                r"(?:\+1[\s\-.]?)?\(?\d{3}\)?[\s\-.](?:\d{3})[\s\-.](\d{4})"
+            ),
+            // Email (RFC 5321 simplified) — last so URL/DB creds claim @-spans first
+            PatternSet::new(
+                PiiType::Email,
+                r"(?i)[a-z0-9._%+\-]+@[a-z0-9.\-]+\.[a-z]{2,}"
             ),
         ]
     })
@@ -309,5 +312,171 @@ mod tests {
     fn test_luhn_valid() {
         assert!(luhn_valid("4532015112830366")); // valid Visa
         assert!(!luhn_valid("4532015112830367")); // invalid
+    }
+
+    #[test]
+    fn test_ipv6_detected() {
+        let spans = Tier1Detector::detect(
+            "server addr: 2001:0db8:85a3:0000:0000:8a2e:0370:7334",
+            &Locale::EnUs,
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::IpV6),
+            "no IPv6 span found: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_ssh_private_key_detected() {
+        let spans = Tier1Detector::detect(
+            "-----BEGIN RSA PRIVATE KEY-----\nMIIE...",
+            &Locale::EnUs,
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::SshPrivateKey),
+            "no SshPrivateKey span found: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_url_with_creds_detected() {
+        let spans = Tier1Detector::detect(
+            "repo: https://user:password123@github.com/org/repo.git",
+            &Locale::EnUs,
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::UrlWithCreds),
+            "no UrlWithCreds span found: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_multiple_pii_in_text() {
+        let spans = Tier1Detector::detect(
+            "Email john@acme.com, SSN: 123-45-6789",
+            &Locale::EnUs,
+        );
+        assert!(
+            spans.len() >= 2,
+            "expected at least 2 spans, got {}: {:?}",
+            spans.len(),
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::Email),
+            "no Email span: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::Ssn),
+            "no Ssn span: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_ssn_space_separator() {
+        let spans = Tier1Detector::detect("SSN: 321 56 7890", &Locale::EnUs);
+        assert!(
+            spans.iter().any(|s| s.entity_type == PiiType::Ssn),
+            "no Ssn span found for space-separated SSN: {:?}",
+            spans.iter().map(|s| s.entity_type.label()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn test_ssn_666_prefix_rejected() {
+        let spans = Tier1Detector::detect("SSN: 666-34-5678", &Locale::EnUs);
+        assert!(
+            !spans.iter().any(|s| s.entity_type == PiiType::Ssn),
+            "SSN with 666 prefix should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_ssn_9xx_prefix_rejected() {
+        let spans = Tier1Detector::detect("SSN: 900-34-5678", &Locale::EnUs);
+        assert!(
+            !spans.iter().any(|s| s.entity_type == PiiType::Ssn),
+            "SSN with 9xx prefix should be rejected"
+        );
+    }
+
+    #[test]
+    fn test_openai_key_no_false_positive_short() {
+        // "sk-abc123" has only 6 chars after "sk-", below the {20,100} minimum
+        let spans = Tier1Detector::detect("sk-abc123", &Locale::EnUs);
+        assert!(
+            !spans.iter().any(|s| s.entity_type == PiiType::OpenAiApiKey),
+            "short sk- string should not match OpenAI key"
+        );
+    }
+
+    #[test]
+    fn test_ipv4_not_false_positive_version() {
+        // "1.2.3" has only 3 octets — not a valid IPv4
+        let spans = Tier1Detector::detect("version 1.2.3", &Locale::EnUs);
+        assert!(
+            !spans.iter().any(|s| s.entity_type == PiiType::IpV4),
+            "version string with 3 octets should not be detected as IPv4"
+        );
+    }
+
+    #[test]
+    fn test_credit_card_no_luhn_invalid_rejected() {
+        // 4532015112830367 — last digit +1 from valid card, fails Luhn
+        let spans = Tier1Detector::detect("Card: 4532015112830367", &Locale::EnUs);
+        assert!(
+            !spans.iter().any(|s| s.entity_type == PiiType::CreditCard),
+            "Luhn-invalid card number should not be detected"
+        );
+    }
+
+    #[test]
+    fn test_replace_in_text_multiple_types() {
+        let text = "Email john@acme.com SSN 123-45-6789";
+        let mut count = 0usize;
+        let (result, _spans) = Tier1Detector::replace_in_text(text, &Locale::EnUs, |_orig, _typ| {
+            count += 1;
+            "REDACTED".to_string()
+        });
+        assert!(
+            result.matches("REDACTED").count() >= 2,
+            "expected at least 2 REDACTED substitutions, got: {:?}",
+            result
+        );
+        assert!(
+            !result.contains("john@acme.com"),
+            "original email still present: {:?}",
+            result
+        );
+        assert!(
+            !result.contains("123-45-6789"),
+            "original SSN still present: {:?}",
+            result
+        );
+    }
+
+    #[test]
+    fn test_spans_are_non_overlapping() {
+        let text = "IP 192.168.1.100 and email user@domain.com are here";
+        let spans = Tier1Detector::detect(text, &Locale::EnUs);
+        // Check every pair of spans for disjoint ranges
+        for i in 0..spans.len() {
+            for j in (i + 1)..spans.len() {
+                let a = &spans[i];
+                let b = &spans[j];
+                let overlap = a.start < b.end && b.start < a.end;
+                assert!(
+                    !overlap,
+                    "spans overlap: [{}, {}) {:?} and [{}, {}) {:?}",
+                    a.start, a.end, a.entity_type.label(),
+                    b.start, b.end, b.entity_type.label()
+                );
+            }
+        }
     }
 }

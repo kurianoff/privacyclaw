@@ -223,7 +223,7 @@ async fn handle_c2u_pii(
         let vault_handle = if let Some(ref pii_ctx) = pii {
             let cid = shared_conv_id.lock().unwrap().clone()
                 .unwrap_or_else(new_uuid);
-            Some(pii_ctx.registry.get_or_create(&cid))
+            Some(pii_ctx.registry.get_or_create_with_store(&cid, &store))
         } else {
             None
         };

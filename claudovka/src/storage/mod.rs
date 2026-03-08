@@ -637,4 +637,145 @@ mod tests {
             "batch_insert_messages with missing conv should be Ok (no-op)"
         );
     }
+
+    // ── Vault tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_save_and_load_vault_basic() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-vault-basic", "anthropic", "fp-vault-basic");
+        store.insert_conversation(&conv).unwrap();
+
+        store
+            .save_vault(
+                "conv-vault-basic",
+                42,
+                &[
+                    ("alice@acme.com".to_string(), "bob@example.com".to_string()),
+                ],
+            )
+            .unwrap();
+
+        let result = store.load_vault("conv-vault-basic").unwrap();
+        assert!(result.is_some(), "load_vault should return Some after save_vault");
+
+        let (seed, records) = result.unwrap();
+        assert_eq!(seed, 42, "rng_seed must round-trip correctly");
+        assert_eq!(records.len(), 1, "expected exactly 1 mapping");
+        assert_eq!(records[0].original,  "alice@acme.com",  "original mismatch");
+        assert_eq!(records[0].synthetic, "bob@example.com", "synthetic mismatch");
+    }
+
+    #[test]
+    fn test_load_vault_nonexistent_conv() {
+        let (store, _dir) = temp_store();
+        // No conversation with this id was ever created.
+        let result = store.load_vault("does-not-exist").unwrap();
+        assert!(result.is_none(), "load_vault on unknown conv_id should return Ok(None)");
+    }
+
+    #[test]
+    fn test_load_vault_no_vault_line() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-no-vault", "openai", "fp-no-vault");
+        store.insert_conversation(&conv).unwrap();
+
+        // Insert some messages but never call save_vault.
+        let msg = make_msg("msg-1", "conv-no-vault", "request");
+        store.insert_message(&msg).unwrap();
+
+        let result = store.load_vault("conv-no-vault").unwrap();
+        assert!(result.is_none(), "no vault line written => should return Ok(None)");
+    }
+
+    #[test]
+    fn test_save_vault_overwrites_existing() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-vault-overwrite", "anthropic", "fp-vault-overwrite");
+        store.insert_conversation(&conv).unwrap();
+
+        // First save — one mapping.
+        store
+            .save_vault(
+                "conv-vault-overwrite",
+                1,
+                &[("first@orig.com".to_string(), "first@synth.com".to_string())],
+            )
+            .unwrap();
+
+        // Second save — different mapping, different seed.
+        store
+            .save_vault(
+                "conv-vault-overwrite",
+                2,
+                &[("second@orig.com".to_string(), "second@synth.com".to_string())],
+            )
+            .unwrap();
+
+        let result = store.load_vault("conv-vault-overwrite").unwrap();
+        assert!(result.is_some());
+        let (seed, records) = result.unwrap();
+
+        // Only the second write should be present.
+        assert_eq!(seed, 2, "seed should reflect the second save");
+        assert_eq!(records.len(), 1, "only one record from the second save");
+        assert_eq!(records[0].original, "second@orig.com",  "original must be from second save");
+        assert_eq!(records[0].synthetic, "second@synth.com", "synthetic must be from second save");
+
+        // The first record must NOT appear.
+        assert!(
+            !records.iter().any(|r| r.original == "first@orig.com"),
+            "first save records should have been overwritten"
+        );
+    }
+
+    #[test]
+    fn test_save_vault_empty_records() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-vault-empty", "openai", "fp-vault-empty");
+        store.insert_conversation(&conv).unwrap();
+
+        // Save with an empty mapping slice — must not crash.
+        store.save_vault("conv-vault-empty", 0, &[]).unwrap();
+
+        let result = store.load_vault("conv-vault-empty").unwrap();
+        assert!(result.is_some(), "empty vault should still produce a vault line");
+        let (seed, records) = result.unwrap();
+        assert_eq!(seed, 0);
+        assert!(records.is_empty(), "no records expected for empty save");
+    }
+
+    #[test]
+    fn test_save_vault_multiple_records() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-vault-multi", "anthropic", "fp-vault-multi");
+        store.insert_conversation(&conv).unwrap();
+
+        let mappings: Vec<(String, String)> = (0..5)
+            .map(|i| {
+                (
+                    format!("original-{}@acme.com", i),
+                    format!("synthetic-{}@example.com", i),
+                )
+            })
+            .collect();
+
+        store.save_vault("conv-vault-multi", 99, &mappings).unwrap();
+
+        let result = store.load_vault("conv-vault-multi").unwrap();
+        assert!(result.is_some());
+        let (seed, records) = result.unwrap();
+
+        assert_eq!(seed, 99);
+        assert_eq!(records.len(), 5, "all 5 records should round-trip");
+
+        for i in 0..5usize {
+            let expected_orig = format!("original-{}@acme.com", i);
+            let expected_synth = format!("synthetic-{}@example.com", i);
+            let found = records
+                .iter()
+                .any(|r| r.original == expected_orig && r.synthetic == expected_synth);
+            assert!(found, "record {i} not found in loaded vault");
+        }
+    }
 }

@@ -23,3 +23,54 @@ retention_days = 30                    # Auto-delete after N days
 
 [logging]
 level = "info"                        # trace | debug | info | warn | error
+
+# ── PII Protection ─────────────────────────────────────────────────────────────
+# claudovka can detect and replace personally identifiable information (PII) in
+# LLM API traffic before it leaves the machine. Detected values are replaced with
+# realistic synthetic equivalents; responses from the LLM are reverse-mapped so
+# the caller receives the original values back.
+
+[pii]
+# Master switch.
+# "off"         — PII processing disabled entirely (Phase 1 passthrough). Default.
+# "detect-only" — Scan traffic and log detections at INFO level; do NOT modify bodies.
+# "replace"     — Full bidirectional replacement: outbound PII → synthetic,
+#                 inbound synthetic → original.
+mode = "off"
+
+# Locale for locale-specific pattern packs (future Tier 2/3 expansion).
+# Accepted values: en-US, en-GB, de-DE, fr-FR, in-IN, ko-KR, br-BR
+locale = "en-US"
+
+# How long a per-conversation vault is kept in memory after last use.
+# The vault holds the original↔synthetic mappings for a conversation.
+vault_ttl_hours = 24
+
+# Directory where ML model files are stored (used by Tier 2 GLiNER / Tier 3 SLM).
+# Defaults to ~/.config/claudovka/models/
+models_dir = "~/.config/claudovka/models"
+
+[pii.tiers]
+# Tier 1: fast regex-only detection (<1 ms per request). Always safe to enable.
+regex = true
+# Tier 2: GLiNER NER model for named-entity detection (names, addresses, etc.).
+# Requires a model to be installed first: claudovka models install gliner-small
+ner = false
+# Tier 3: SLM sidecar — delegates to a local small language model over HTTP.
+# Requires a running sidecar; see docs/PII-SETUP.md.
+slm = false
+
+[pii.ner]
+# Path to the installed GLiNER ONNX model directory.
+# Defaults to ~/.config/claudovka/models/
+model_path = "~/.config/claudovka/models"
+# Minimum confidence score (0.0–1.0) to treat a span as PII.
+confidence_threshold = 0.5
+# Maximum time in milliseconds to wait for the NER model before skipping.
+timeout_ms = 500
+
+[pii.slm]
+# HTTP endpoint of the SLM sidecar (Tier 3).
+endpoint = "http://127.0.0.1:8080"
+# Maximum time in milliseconds to wait for the sidecar before skipping.
+timeout_ms = 5000

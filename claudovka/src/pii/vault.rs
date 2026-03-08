@@ -5,6 +5,7 @@ use sha1::{Digest, Sha1};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
+use crate::storage::Store;
 
 /// Every type of PII the system can detect and replace.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -316,6 +317,50 @@ impl VaultRegistry {
         handle
     }
 
+    /// Get existing vault or load from storage on cache miss, falling back to a new empty vault.
+    pub fn get_or_create_with_store(&self, conv_id: &str, store: &Store) -> VaultHandle {
+        // Check in-memory cache first.
+        {
+            let mut map = self.vaults.lock().unwrap();
+            if let Some(entry) = map.get_mut(conv_id) {
+                entry.last_accessed = Instant::now();
+                return Arc::clone(&entry.handle);
+            }
+        }
+
+        // Cache miss — try to load from storage.
+        let vault = match store.load_vault(conv_id) {
+            Ok(Some((seed, records))) => {
+                tracing::info!(conv_id = %conv_id, mappings = records.len(), "vault: restored from storage");
+                let vault_records: Vec<VaultRecord> = records
+                    .into_iter()
+                    .map(|r| VaultRecord {
+                        original: r.original,
+                        synthetic: r.synthetic,
+                        pii_type: PiiType::Custom(r.pii_type),
+                    })
+                    .collect();
+                PiiVault::from_records(conv_id, seed, vault_records)
+            }
+            Ok(None) => {
+                tracing::debug!(conv_id = %conv_id, "vault: no persisted vault found, creating fresh");
+                PiiVault::new(conv_id)
+            }
+            Err(e) => {
+                tracing::warn!(conv_id = %conv_id, err = %e, "vault: load_vault failed, creating fresh");
+                PiiVault::new(conv_id)
+            }
+        };
+
+        let handle = Arc::new(RwLock::new(vault));
+        let mut map = self.vaults.lock().unwrap();
+        map.insert(conv_id.to_string(), VaultEntry {
+            handle: Arc::clone(&handle),
+            last_accessed: Instant::now(),
+        });
+        handle
+    }
+
     /// Insert a pre-loaded vault (used after loading from storage).
     pub fn insert(&self, conv_id: &str, vault: PiiVault) -> VaultHandle {
         let handle = Arc::new(RwLock::new(vault));
@@ -401,5 +446,249 @@ mod tests {
         let (result, any) = vault.replace_synthetics("hello world");
         assert!(!any);
         assert_eq!(result, "hello world");
+    }
+
+    // ── New tests ──────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_replace_originals_basic() {
+        let mut vault = PiiVault::new("test-conv-ro-basic");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "bob@example.com".to_string(),
+            &PiiType::Email,
+        );
+        let result = vault.replace_originals("send to alice@acme.com please");
+        assert!(result.contains("bob@example.com"), "synthetic not present: {result}");
+        assert!(!result.contains("alice@acme.com"), "original still present: {result}");
+    }
+
+    #[test]
+    fn test_replace_originals_empty_vault() {
+        let vault = PiiVault::new("test-conv-ro-empty");
+        let input = "nothing to replace here";
+        let result = vault.replace_originals(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_replace_originals_multiple_mappings() {
+        let mut vault = PiiVault::new("test-conv-ro-multi");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "syn-email@example.com".to_string(),
+            &PiiType::Email,
+        );
+        vault.add_mapping(
+            "123-45-6789".to_string(),
+            "999-00-0001".to_string(),
+            &PiiType::Ssn,
+        );
+        vault.add_mapping(
+            "Alice Smith".to_string(),
+            "Synthetic Name".to_string(),
+            &PiiType::PersonName,
+        );
+
+        let text = "Email alice@acme.com, SSN 123-45-6789, Name Alice Smith.";
+        let result = vault.replace_originals(text);
+
+        assert!(result.contains("syn-email@example.com"), "email not replaced: {result}");
+        assert!(result.contains("999-00-0001"), "ssn not replaced: {result}");
+        assert!(result.contains("Synthetic Name"), "name not replaced: {result}");
+
+        assert!(!result.contains("alice@acme.com"), "original email still present: {result}");
+        assert!(!result.contains("123-45-6789"), "original ssn still present: {result}");
+        assert!(!result.contains("Alice Smith"), "original name still present: {result}");
+    }
+
+    #[test]
+    fn test_full_round_trip_forward_and_back() {
+        let mut vault = PiiVault::new("test-conv-roundtrip");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "bob@example.com".to_string(),
+            &PiiType::Email,
+        );
+
+        let original_text = "Please contact alice@acme.com for support.";
+        let with_synthetic = vault.replace_originals(original_text);
+        assert!(with_synthetic.contains("bob@example.com"));
+
+        let (restored, any) = vault.replace_synthetics(&with_synthetic);
+        assert!(any);
+        assert_eq!(restored, original_text);
+    }
+
+    #[test]
+    fn test_replace_synthetics_no_match() {
+        let mut vault = PiiVault::new("test-conv-rs-nomatch");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "bob@example.com".to_string(),
+            &PiiType::Email,
+        );
+
+        let text = "no synthetic tokens here at all";
+        let (result, any_match) = vault.replace_synthetics(text);
+        assert!(!any_match);
+        assert_eq!(result, text);
+    }
+
+    #[test]
+    fn test_replace_synthetics_multiple_matches() {
+        let mut vault = PiiVault::new("test-conv-rs-multi");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "syn-email@example.com".to_string(),
+            &PiiType::Email,
+        );
+        vault.add_mapping(
+            "Bob Jones".to_string(),
+            "Fake Person".to_string(),
+            &PiiType::PersonName,
+        );
+
+        let text = "Reply to syn-email@example.com, re: Fake Person.";
+        let (result, any_match) = vault.replace_synthetics(text);
+
+        assert!(any_match);
+        assert!(result.contains("alice@acme.com"), "email not restored: {result}");
+        assert!(result.contains("Bob Jones"), "name not restored: {result}");
+        assert!(!result.contains("syn-email@example.com"), "synthetic email still present: {result}");
+        assert!(!result.contains("Fake Person"), "synthetic name still present: {result}");
+    }
+
+    #[test]
+    fn test_vault_from_records() {
+        let records = vec![VaultRecord {
+            original: "alice@acme.com".to_string(),
+            synthetic: "bob@example.com".to_string(),
+            pii_type: PiiType::Email,
+        }];
+        let vault = PiiVault::from_records("conv-test", 12345u64, records);
+
+        assert_eq!(vault.get_synthetic("alice@acme.com"), Some("bob@example.com"));
+        assert!(!vault.is_empty());
+    }
+
+    #[test]
+    fn test_vault_to_records() {
+        let mut vault = PiiVault::new("test-conv-to-records");
+        vault.add_mapping(
+            "alice@acme.com".to_string(),
+            "bob@example.com".to_string(),
+            &PiiType::Email,
+        );
+
+        let records = vault.to_records();
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].synthetic, "bob@example.com");
+        assert_eq!(records[0].original, "alice@acme.com");
+    }
+
+    #[test]
+    fn test_mapping_count() {
+        let mut vault = PiiVault::new("test-conv-count");
+        vault.add_mapping("a@a.com".to_string(), "x@x.com".to_string(), &PiiType::Email);
+        vault.add_mapping("b@b.com".to_string(), "y@y.com".to_string(), &PiiType::Email);
+        vault.add_mapping("c@c.com".to_string(), "z@z.com".to_string(), &PiiType::Email);
+        assert_eq!(vault.mapping_count(), 3);
+    }
+
+    #[test]
+    fn test_pairs_iter() {
+        let mut vault = PiiVault::new("test-conv-pairs");
+        vault.add_mapping(
+            "orig-one".to_string(),
+            "syn-one".to_string(),
+            &PiiType::PersonName,
+        );
+        vault.add_mapping(
+            "orig-two".to_string(),
+            "syn-two".to_string(),
+            &PiiType::PersonName,
+        );
+
+        let collected: Vec<(&str, &str)> = vault.pairs().collect();
+        assert_eq!(collected.len(), 2);
+
+        let has_one = collected.iter().any(|&(o, s)| o == "orig-one" && s == "syn-one");
+        let has_two = collected.iter().any(|&(o, s)| o == "orig-two" && s == "syn-two");
+        assert!(has_one, "pair (orig-one, syn-one) not found");
+        assert!(has_two, "pair (orig-two, syn-two) not found");
+    }
+
+    #[test]
+    fn test_synthetic_key_first_chars() {
+        let mut vault = PiiVault::new("test-conv-firstchars");
+        vault.add_mapping("orig-a".to_string(), "Alpha_token".to_string(), &PiiType::PersonName);
+        vault.add_mapping("orig-b".to_string(), "Beta_token".to_string(), &PiiType::PersonName);
+        vault.add_mapping("orig-c".to_string(), "Gamma_token".to_string(), &PiiType::PersonName);
+
+        let chars: std::collections::HashSet<char> = vault.synthetic_key_first_chars().collect();
+        assert!(chars.contains(&'A'), "missing 'A': {chars:?}");
+        assert!(chars.contains(&'B'), "missing 'B': {chars:?}");
+        assert!(chars.contains(&'G'), "missing 'G': {chars:?}");
+    }
+
+    #[test]
+    fn test_registry_creates_distinct_vaults() {
+        let registry = VaultRegistry::new(Duration::from_secs(60));
+        let handle1 = registry.get_or_create("conv-1");
+        let handle2 = registry.get_or_create("conv-2");
+
+        let id1 = handle1.read().unwrap().conversation_id.clone();
+        let id2 = handle2.read().unwrap().conversation_id.clone();
+
+        assert_eq!(id1, "conv-1");
+        assert_eq!(id2, "conv-2");
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn test_registry_get_or_create_idempotent() {
+        let registry = VaultRegistry::new(Duration::from_secs(60));
+
+        let handle_first = registry.get_or_create("same-conv");
+        handle_first.write().unwrap().add_mapping(
+            "original@test.com".to_string(),
+            "synthetic@test.com".to_string(),
+            &PiiType::Email,
+        );
+
+        let handle_second = registry.get_or_create("same-conv");
+        let synthetic = handle_second
+            .read()
+            .unwrap()
+            .get_synthetic("original@test.com")
+            .map(|s| s.to_string());
+
+        assert_eq!(synthetic, Some("synthetic@test.com".to_string()),
+            "second handle does not see the mapping added via first handle");
+    }
+
+    #[test]
+    fn test_replace_synthetics_partial_overlap() {
+        let mut vault = PiiVault::new("test-conv-overlap");
+        vault.add_mapping(
+            "short-original".to_string(),
+            "AAA_TOKEN".to_string(),
+            &PiiType::Custom("test".to_string()),
+        );
+        vault.add_mapping(
+            "long-original".to_string(),
+            "AAA_TOKEN_LONG".to_string(),
+            &PiiType::Custom("test".to_string()),
+        );
+
+        let text = "value is AAA_TOKEN_LONG here";
+        let (result, any_match) = vault.replace_synthetics(text);
+
+        assert!(any_match);
+        // LeftmostLongest: "AAA_TOKEN_LONG" must win over "AAA_TOKEN"
+        assert!(result.contains("long-original"), "longer token not matched: {result}");
+        assert!(!result.contains("short-original"), "shorter token matched instead: {result}");
+        assert!(!result.contains("AAA_TOKEN"), "synthetic still present: {result}");
     }
 }
