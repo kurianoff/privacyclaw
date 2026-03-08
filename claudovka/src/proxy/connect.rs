@@ -17,6 +17,7 @@ pub async fn handle(
     cert_cache: CertCache,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
     client_tls_cfg: Arc<ClientConfig>,
 ) -> Result<()> {
     tracing::debug!("connect: reading CONNECT request line");
@@ -48,7 +49,7 @@ pub async fn handle(
 
     if config.is_intercepted(&host) {
         tracing::info!(host = %host, intercept = true, "connect: intercept decision");
-        mitm(inner_stream, &host, port, cert_cache, store, ws_tx, client_tls_cfg).await
+        mitm(inner_stream, &host, port, cert_cache, store, ws_tx, pii.clone(), client_tls_cfg).await
     } else {
         tracing::info!(host = %host, intercept = false, "connect: intercept decision");
         passthrough(inner_stream, &host, port).await
@@ -77,6 +78,7 @@ async fn mitm(
     cert_cache: CertCache,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
     client_tls_cfg: Arc<ClientConfig>,
 ) -> Result<()> {
     tracing::warn!(host = %host, port = port, "connect: MITM session starting");
@@ -117,7 +119,7 @@ async fn mitm(
     let result = crate::proxy::intercept::run(
         client_reader, client_writer,
         upstream_reader, upstream_writer,
-        host.to_string(), store, ws_tx,
+        host.to_string(), store, ws_tx, pii,
     ).await;
 
     tracing::warn!(host = %host, port = port, "connect: MITM session ended");

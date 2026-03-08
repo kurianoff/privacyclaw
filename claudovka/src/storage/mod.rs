@@ -26,6 +26,22 @@ pub struct Message {
     pub tokens_out: Option<i64>,
 }
 
+/// Vault record as stored on disk (mirrors pii::vault::VaultRecord).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StoredVaultRecord {
+    pub original: String,
+    pub synthetic: String,
+    pub pii_type: String, // stored as label string
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct PersistedVault {
+    #[serde(rename = "type")]
+    record_type: String,
+    rng_seed: u64,
+    mappings: Vec<StoredVaultRecord>,
+}
+
 /// NDJSON-based conversation store.
 ///
 /// Each conversation is a `.ndjson` file:
@@ -281,6 +297,89 @@ impl Store {
             }));
         }
         Ok(serde_json::Value::Array(result))
+    }
+
+    /// Persist the vault for a conversation as a `"type":"vault"` NDJSON line.
+    ///
+    /// If a vault line already exists in the file, it is replaced in-place (full rewrite).
+    /// If no vault line exists, the line is appended to the end of the file.
+    pub fn save_vault(
+        &self,
+        conv_id: &str,
+        rng_seed: u64,
+        records: &[(String, String)],
+    ) -> Result<()> {
+        let Some(path) = self.conv_file_path(conv_id) else {
+            return Ok(());
+        };
+
+        let persisted = PersistedVault {
+            record_type: "vault".to_string(),
+            rng_seed,
+            mappings: records
+                .iter()
+                .map(|(orig, synth)| StoredVaultRecord {
+                    original: orig.clone(),
+                    synthetic: synth.clone(),
+                    pii_type: String::new(),
+                })
+                .collect(),
+        };
+        let vault_line = serde_json::to_string(&persisted)? + "\n";
+
+        // Read existing file lines.
+        let content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read {:?} for vault save", path))?;
+
+        let _guard = self.write_lock.lock().unwrap();
+
+        // Check if a vault line already exists.
+        let mut lines: Vec<&str> = content.lines().collect();
+        let existing_idx = lines.iter().position(|l| l.contains("\"type\":\"vault\""));
+
+        if let Some(idx) = existing_idx {
+            lines[idx] = vault_line.trim_end_matches('\n');
+            let new_content = lines.join("\n") + "\n";
+            std::fs::write(&path, new_content.as_bytes())
+                .with_context(|| format!("rewrite {:?} for vault update", path))?;
+        } else {
+            // Append vault line to end of file.
+            let mut file = std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .with_context(|| format!("open {:?} for vault append", path))?;
+            file.write_all(vault_line.as_bytes())
+                .with_context(|| format!("append vault to {:?}", path))?;
+        }
+
+        Ok(())
+    }
+
+    /// Load vault state from a conversation's NDJSON file.
+    /// Returns `(rng_seed, records)` if found, else `None`.
+    pub fn load_vault(
+        &self,
+        conv_id: &str,
+    ) -> Result<Option<(u64, Vec<StoredVaultRecord>)>> {
+        let Some(path) = self.conv_file_path(conv_id) else {
+            return Ok(None);
+        };
+        let file = std::fs::File::open(&path)
+            .with_context(|| format!("open {:?} for vault load", path))?;
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines() {
+            let line = line?;
+            if line.contains("\"type\":\"vault\"") {
+                match serde_json::from_str::<PersistedVault>(&line) {
+                    Ok(pv) => return Ok(Some((pv.rng_seed, pv.mappings))),
+                    Err(e) => {
+                        tracing::warn!("Malformed vault line in {:?}: {}", path, e);
+                        return Ok(None);
+                    }
+                }
+            }
+        }
+        Ok(None)
     }
 }
 

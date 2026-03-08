@@ -14,6 +14,8 @@ pub struct Config {
     pub logging: LoggingConfig,
     #[serde(default)]
     pub network_proxy: NetworkProxyConfig,
+    #[serde(default)]
+    pub pii: PiiConfig,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -93,6 +95,81 @@ impl Default for NetworkProxyConfig {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PiiConfig {
+    /// "off" | "detect-only" | "replace"
+    pub mode: String,
+    pub tiers: PiiTiersConfig,
+    pub ner: PiiNerConfig,
+    pub slm: PiiSlmConfig,
+    pub vault_ttl_hours: u64,
+    pub locale: String,
+    pub models_dir: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PiiTiersConfig {
+    pub regex: bool,
+    pub ner: bool,
+    pub slm: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PiiNerConfig {
+    pub model_path: String,
+    pub confidence_threshold: f32,
+    pub timeout_ms: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PiiSlmConfig {
+    pub endpoint: String,
+    pub timeout_ms: u64,
+}
+
+impl Default for PiiTiersConfig {
+    fn default() -> Self {
+        Self {
+            regex: true,
+            ner: false,
+            slm: false,
+        }
+    }
+}
+
+impl Default for PiiNerConfig {
+    fn default() -> Self {
+        Self {
+            model_path: default_models_dir().to_string_lossy().to_string(),
+            confidence_threshold: 0.5,
+            timeout_ms: 500,
+        }
+    }
+}
+
+impl Default for PiiSlmConfig {
+    fn default() -> Self {
+        Self {
+            endpoint: "http://127.0.0.1:8080".to_string(),
+            timeout_ms: 5000,
+        }
+    }
+}
+
+impl Default for PiiConfig {
+    fn default() -> Self {
+        Self {
+            mode: "off".to_string(),
+            tiers: PiiTiersConfig::default(),
+            ner: PiiNerConfig::default(),
+            slm: PiiSlmConfig::default(),
+            vault_ttl_hours: 24,
+            locale: "en-US".to_string(),
+            models_dir: default_models_dir().to_string_lossy().to_string(),
+        }
+    }
+}
+
 #[allow(clippy::derivable_impls)]
 impl Default for Config {
     fn default() -> Self {
@@ -102,6 +179,7 @@ impl Default for Config {
             storage: StorageConfig::default(),
             logging: LoggingConfig::default(),
             network_proxy: NetworkProxyConfig::default(),
+            pii: PiiConfig::default(),
         }
     }
 }
@@ -131,6 +209,10 @@ impl Config {
     pub fn resolved_logs_dir(&self) -> PathBuf {
         expand_tilde(&self.storage.logs_dir)
     }
+
+    pub fn resolved_models_dir(&self) -> PathBuf {
+        expand_tilde(&self.pii.models_dir)
+    }
 }
 
 pub fn default_config_dir() -> PathBuf {
@@ -149,6 +231,10 @@ fn default_config_path() -> PathBuf {
 
 fn default_logs_dir() -> PathBuf {
     default_config_dir().join("logs")
+}
+
+pub fn default_models_dir() -> PathBuf {
+    default_config_dir().join("models")
 }
 
 pub fn expand_tilde(path: &str) -> PathBuf {

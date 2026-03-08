@@ -27,6 +27,7 @@ pub async fn run(
     cert_cache: CertCache,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
 ) -> Result<()> {
     let addr = &config.network_proxy.listen;
 
@@ -68,11 +69,12 @@ pub async fn run(
         let acceptor = acceptor.clone();
         let store = store.clone();
         let ws_tx = ws_tx.clone();
+        let pii = pii.clone();
         let client_cfg = client_cfg.clone();
 
         tokio::spawn(async move {
             tracing::debug!(peer_addr = %peer_addr, "network: connection task started");
-            if let Err(e) = handle(stream, config, acceptor, store, ws_tx, client_cfg).await {
+            if let Err(e) = handle(stream, config, acceptor, store, ws_tx, pii, client_cfg).await {
                 tracing::warn!(peer_addr = %peer_addr, err = %e, "network: connection handler error");
             }
             tracing::debug!(peer_addr = %peer_addr, "network: connection task finished");
@@ -86,6 +88,7 @@ async fn handle(
     acceptor: TlsAcceptor,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
     client_cfg: Arc<ClientConfig>,
 ) -> Result<()> {
     // Peek at the ClientHello to get SNI BEFORE committing to a TLS handshake.
@@ -154,7 +157,7 @@ async fn handle(
     crate::proxy::intercept::run(
         client_reader, client_writer,
         upstream_reader, upstream_writer,
-        host, store, ws_tx,
+        host, store, ws_tx, pii,
     ).await
 }
 

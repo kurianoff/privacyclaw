@@ -38,6 +38,14 @@ pub enum WsEvent {
         tokens_in: Option<i64>,
         tokens_out: Option<i64>,
     },
+    PiiDetected {
+        conversation_id: String,
+        entity_type: String,
+        original_masked: String, // e.g. "[EMAIL]" — NOT the real value
+        synthetic: String,
+        tier: u8,
+        confidence: f32,
+    },
 }
 
 #[derive(Embed)]
@@ -108,6 +116,16 @@ async fn dispatch(stream: TcpStream, store: Store, ws_tx: broadcast::Sender<WsEv
 
 async fn handle_http(mut stream: TcpStream, path: &str, store: Store) -> Result<()> {
     tracing::info!(path = %path, "dashboard: HTTP request");
+
+    // Vault endpoint — must be checked before the generic /api/conversations/:id branch
+    if path.starts_with("/api/conversations/") && path.ends_with("/vault") {
+        let conv_id = path
+            .strip_prefix("/api/conversations/").unwrap_or("")
+            .strip_suffix("/vault").unwrap_or("");
+        handle_vault_api(&mut stream, &store, conv_id).await?;
+        return Ok(());
+    }
+
     let (status, content_type, body) = match path {
         "/" | "/index.html" => serve_asset("index.html"),
         "/style.css" => serve_asset("style.css"),
@@ -139,6 +157,27 @@ async fn handle_http(mut stream: TcpStream, path: &str, store: Store) -> Result<
     );
     stream.write_all(header.as_bytes()).await?;
     stream.write_all(&body).await?;
+    Ok(())
+}
+
+async fn handle_vault_api(stream: &mut TcpStream, store: &Store, conv_id: &str) -> Result<()> {
+    // store.load_vault returns Option<(u64, Vec<StoredVaultRecord>)>
+    let vault_data = match store.load_vault(conv_id) {
+        Ok(Some((_seed, records))) => {
+            records.iter().map(|r| serde_json::json!({
+                "type": r.pii_type,
+                "original_masked": format!("[{}]", r.pii_type.to_uppercase()),
+                "synthetic": r.synthetic,
+            })).collect::<Vec<_>>()
+        }
+        _ => vec![],
+    };
+    let body = serde_json::to_string(&vault_data)?;
+    let response = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nAccess-Control-Allow-Origin: *\r\n\r\n{}",
+        body.len(), body
+    );
+    stream.write_all(response.as_bytes()).await?;
     Ok(())
 }
 
@@ -202,6 +241,7 @@ async fn handle_ws_upgrade(
                             WsEvent::Message { .. } => "message",
                             WsEvent::TextDelta { .. } => "text_delta",
                             WsEvent::ResponseComplete { .. } => "response_complete",
+                            WsEvent::PiiDetected { .. } => "pii_detected",
                         };
                         let json = serde_json::to_string(&ev).unwrap_or_default();
                         if sink.send(Message::Text(json)).await.is_err() {

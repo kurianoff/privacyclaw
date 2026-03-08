@@ -1,7 +1,9 @@
 mod ca;
 mod config;
 mod dashboard;
+mod models;
 mod parser;
+mod pii;
 mod proxy;
 mod storage;
 mod util;
@@ -12,6 +14,9 @@ use config::{default_ca_dir, Config};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tokio::sync::broadcast;
+use crate::pii::{PiiCtx, PiiContext, PiiMode};
+use crate::pii::vault::VaultRegistry;
+use std::time::Duration;
 
 #[derive(Parser)]
 #[command(name = "claudovka", about = "Local MITM privacy proxy for LLM API traffic", version)]
@@ -33,9 +38,21 @@ enum Commands {
         install_ca: bool,
     },
     /// Start the CONNECT proxy and dashboard (configure apps with HTTPS_PROXY)
-    Start,
+    Start {
+        /// Enable PII replace mode (Tier 1+2)
+        #[arg(long)]
+        pii: bool,
+        /// Also enable Tier 3 SLM sidecar
+        #[arg(long)]
+        pii_llm: bool,
+    },
     /// Start the network-level transparent proxy (requires /etc/hosts + pf redirect)
-    NetworkStart,
+    NetworkStart {
+        #[arg(long)]
+        pii: bool,
+        #[arg(long)]
+        pii_llm: bool,
+    },
     /// Print /etc/hosts entries and macOS pf rules for network mode setup
     SetupNetwork,
     /// Print the CA certificate path
@@ -49,6 +66,36 @@ enum Commands {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Test PII detection on a text string
+    TestPii {
+        /// Text to analyze
+        text: String,
+        /// Locale (e.g. en-US, in-IN, br-BR)
+        #[arg(long)]
+        locale: Option<String>,
+        /// Output format: text or json
+        #[arg(long, default_value = "text")]
+        format: String,
+    },
+    /// Manage ML models for Tier 2/3 PII detection
+    Models {
+        #[command(subcommand)]
+        action: ModelsAction,
+    },
+    /// Run PII detection benchmark against built-in fixtures
+    Benchmark {
+        /// Only benchmark this tier (1 or 2)
+        #[arg(long)]
+        tier: Option<u8>,
+    },
+}
+
+#[derive(Subcommand)]
+enum ModelsAction {
+    /// Install a model by name
+    Install { name: String },
+    /// List installed models
+    List,
 }
 
 #[tokio::main]
@@ -72,12 +119,15 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Commands::Init { install_ca } => cmd_init(&cfg, install_ca).await,
-        Commands::Start => cmd_start(cfg).await,
-        Commands::NetworkStart => cmd_network_start(cfg).await,
+        Commands::Start { pii, pii_llm } => cmd_start(cfg, pii, pii_llm).await,
+        Commands::NetworkStart { pii, pii_llm } => cmd_network_start(cfg, pii, pii_llm).await,
         Commands::SetupNetwork => cmd_setup_network(&cfg),
         Commands::CaPath => cmd_ca_path(&cfg),
         Commands::ResetCa => cmd_reset_ca(&cfg).await,
         Commands::Export { format, output } => cmd_export(&cfg, &format, &output).await,
+        Commands::TestPii { text, locale, format } => cmd_test_pii(text, locale, format).await,
+        Commands::Models { action } => cmd_models(action).await,
+        Commands::Benchmark { tier } => cmd_benchmark(tier).await,
     }
 }
 
@@ -117,7 +167,7 @@ async fn cmd_init(cfg: &Config, install_ca: bool) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_start(cfg: Config) -> Result<()> {
+async fn cmd_start(cfg: Config, pii_flag: bool, _pii_llm: bool) -> Result<()> {
     let ca_dir = default_ca_dir();
     let bundle = ca::load_ca(&ca_dir)?
         .context("CA not initialized. Run `claudovka init` first.")?;
@@ -137,15 +187,36 @@ async fn cmd_start(cfg: Config) -> Result<()> {
     let cert_cache = ca::cert_gen::CertCache::new(bundle);
     tracing::info!("cert cache initialised");
 
+    let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
+        PiiMode::Replace
+    } else if cfg.pii.mode == "detect-only" {
+        PiiMode::DetectOnly
+    } else {
+        PiiMode::Off
+    };
+
+    let pii: PiiCtx = if pii_mode != PiiMode::Off {
+        let ttl = Duration::from_secs(cfg.pii.vault_ttl_hours * 3600);
+        let locale = crate::pii::locale::Locale::from_str_opt(&cfg.pii.locale)
+            .unwrap_or_default();
+        Some(Arc::new(PiiContext {
+            registry: Arc::new(VaultRegistry::new(ttl)),
+            locale,
+            mode: pii_mode,
+        }))
+    } else {
+        None
+    };
+
     let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);
 
     tracing::warn!("starting claudovka in CONNECT mode");
 
     let proxy_task = {
-        let (c, cc, s, w) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone());
+        let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
         tokio::spawn(async move {
-            if let Err(e) = proxy::run(c, cc, s, w).await {
+            if let Err(e) = proxy::run(c, cc, s, w, p).await {
                 tracing::error!("Proxy error: {}", e);
             }
         })
@@ -153,9 +224,9 @@ async fn cmd_start(cfg: Config) -> Result<()> {
 
     let net_task = if cfg.network_proxy.enabled {
         tracing::warn!("starting network proxy alongside CONNECT proxy");
-        let (c, cc, s, w) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone());
+        let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
         tokio::spawn(async move {
-            if let Err(e) = proxy::network::run(c, cc, s, w).await {
+            if let Err(e) = proxy::network::run(c, cc, s, w, p).await {
                 tracing::error!("Network proxy error: {}", e);
             }
         })
@@ -191,7 +262,7 @@ async fn cmd_start(cfg: Config) -> Result<()> {
     Ok(())
 }
 
-async fn cmd_network_start(cfg: Config) -> Result<()> {
+async fn cmd_network_start(cfg: Config, pii_flag: bool, _pii_llm: bool) -> Result<()> {
     let ca_dir = default_ca_dir();
     let bundle = ca::load_ca(&ca_dir)?
         .context("CA not initialized. Run `claudovka init` first.")?;
@@ -209,15 +280,36 @@ async fn cmd_network_start(cfg: Config) -> Result<()> {
     let cert_cache = ca::cert_gen::CertCache::new(bundle);
     tracing::info!("cert cache initialised");
 
+    let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
+        PiiMode::Replace
+    } else if cfg.pii.mode == "detect-only" {
+        PiiMode::DetectOnly
+    } else {
+        PiiMode::Off
+    };
+
+    let pii: PiiCtx = if pii_mode != PiiMode::Off {
+        let ttl = Duration::from_secs(cfg.pii.vault_ttl_hours * 3600);
+        let locale = crate::pii::locale::Locale::from_str_opt(&cfg.pii.locale)
+            .unwrap_or_default();
+        Some(Arc::new(PiiContext {
+            registry: Arc::new(VaultRegistry::new(ttl)),
+            locale,
+            mode: pii_mode,
+        }))
+    } else {
+        None
+    };
+
     let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);
 
     tracing::warn!("starting claudovka in network mode");
 
     let net_task = {
-        let (c, cc, s, w) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone());
+        let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
         tokio::spawn(async move {
-            if let Err(e) = proxy::network::run(c, cc, s, w).await {
+            if let Err(e) = proxy::network::run(c, cc, s, w, p).await {
                 tracing::error!("Network proxy error: {}", e);
             }
         })
@@ -328,5 +420,113 @@ async fn cmd_export(cfg: &Config, format: &str, output: &PathBuf) -> Result<()> 
         }
         _ => anyhow::bail!("Unsupported format: {}", format),
     }
+    Ok(())
+}
+
+async fn cmd_test_pii(text: String, locale: Option<String>, format: String) -> Result<()> {
+    use crate::pii::locale::Locale;
+    use crate::pii::tier1::Tier1Detector;
+    use crate::pii::vault::PiiVault;
+    use crate::pii::synth::SyntheticGenerator;
+
+    let locale = locale.as_deref()
+        .and_then(Locale::from_str_opt)
+        .unwrap_or_default();
+
+    let spans = Tier1Detector::detect(&text, &locale);
+
+    if format == "json" {
+        let mut results = Vec::new();
+        let mut vault = PiiVault::new("cli-test");
+        for span in &spans {
+            let original = &text[span.start..span.end];
+            let synthetic = SyntheticGenerator::get_or_create(&mut vault, original, &span.entity_type, &locale);
+            results.push(serde_json::json!({
+                "type": span.entity_type.label(),
+                "original": original,
+                "synthetic": synthetic,
+                "tier": span.tier,
+                "confidence": span.confidence,
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&results)?);
+    } else {
+        if spans.is_empty() {
+            println!("No PII detected.");
+        } else {
+            println!("{:<20} {:<40} {:<30} {:<6} {}", "Type", "Original", "Synthetic", "Tier", "Confidence");
+            println!("{}", "-".repeat(105));
+            let mut vault = PiiVault::new("cli-test");
+            for span in &spans {
+                let original = &text[span.start..span.end];
+                let synthetic = SyntheticGenerator::get_or_create(&mut vault, original, &span.entity_type, &locale);
+                println!("{:<20} {:<40} {:<30} {:<6} {:.2}",
+                    span.entity_type.label(),
+                    if original.len() > 38 { &original[..38] } else { original },
+                    if synthetic.len() > 28 { &synthetic[..28] } else { &synthetic },
+                    span.tier,
+                    span.confidence);
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_models(action: ModelsAction) -> Result<()> {
+    let cfg = Config::default();
+    let models_dir = cfg.resolved_models_dir();
+
+    match action {
+        ModelsAction::Install { name } => {
+            println!("Installing model '{}'...", name);
+            crate::models::install(&name, &models_dir).await?;
+            println!("Model '{}' installed successfully.", name);
+        }
+        ModelsAction::List => {
+            let installed = crate::models::list_installed(&models_dir)?;
+            if installed.is_empty() {
+                println!("No models installed. Use: claudovka models install <name>");
+                println!("\nAvailable models:");
+                for m in crate::models::catalog() {
+                    println!("  {} — {} ({} MB)", m.name, m.description, m.size_mb);
+                }
+            } else {
+                println!("{:<30} {:<10} {}", "Name", "Size", "Path");
+                println!("{}", "-".repeat(80));
+                for m in installed {
+                    println!("{:<30} {:<10} {}", m.name, format!("{}MB", m.size_bytes / 1_048_576), m.path.display());
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_benchmark(tier: Option<u8>) -> Result<()> {
+    use crate::pii::locale::Locale;
+    use crate::pii::tier1::Tier1Detector;
+
+    let test_cases: &[(&str, &str)] = &[
+        ("john@acme.com", "EMAIL"),
+        ("123-45-6789", "SSN"),
+        ("4532015112830366", "CREDIT_CARD"),
+        ("sk-abcdefghijklmnopqrstuvwxyz12345678901234", "OPENAI_API_KEY"),
+        ("AKIAIOSFODNN7EXAMPLE", "AWS_ACCESS_KEY"),
+    ];
+
+    let tier_filter = tier.unwrap_or(1);
+    println!("Running Tier {} benchmark...\n", tier_filter);
+
+    let mut total = 0usize;
+    let mut detected = 0usize;
+    for (text, expected_type) in test_cases {
+        let spans = Tier1Detector::detect(text, &Locale::EnUs);
+        let found = spans.iter().any(|s| s.entity_type.label() == *expected_type);
+        total += 1;
+        if found { detected += 1; }
+        println!("[{}] {} → {}", if found { "PASS" } else { "FAIL" }, expected_type, text);
+    }
+
+    println!("\nResults: {}/{} detected ({:.0}%)", detected, total, 100.0 * detected as f32 / total as f32);
     Ok(())
 }

@@ -18,6 +18,7 @@ pub async fn run(
     cert_cache: CertCache,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
 ) -> Result<()> {
     let addr = &config.proxy.listen;
     let listener = TcpListener::bind(addr).await?;
@@ -40,11 +41,12 @@ pub async fn run(
         let cert_cache = cert_cache.clone();
         let store = store.clone();
         let ws_tx = ws_tx.clone();
+        let pii = pii.clone();
         let client_tls_cfg = client_tls_cfg.clone();
 
         tokio::spawn(async move {
             tracing::debug!(peer_addr = %peer_addr, "CONNECT: connection task started");
-            if let Err(e) = connect::handle(stream, config, cert_cache, store, ws_tx, client_tls_cfg).await {
+            if let Err(e) = connect::handle(stream, config, cert_cache, store, ws_tx, pii, client_tls_cfg).await {
                 tracing::warn!(peer_addr = %peer_addr, err = %e, "CONNECT: connection error");
             }
             tracing::debug!(peer_addr = %peer_addr, "CONNECT: connection task finished");

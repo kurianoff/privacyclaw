@@ -35,8 +35,18 @@ futures-util = "0.3"
 http = "1"
 rustls-pki-types = "1"
 sha1 = "0.10"
+sha2 = "0.10"
 base64 = "0.22"
 rustls-pemfile = "2"
+aho-corasick = "1.1"
+regex = "1"
+fancy-regex = "0.13"
+fake = { version = "2.9", features = ["derive"] }
+rand = { version = "0.8", features = ["small_rng"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
+
+[features]
+ort-ner = []
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
