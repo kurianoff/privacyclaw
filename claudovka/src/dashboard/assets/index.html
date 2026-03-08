@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Claudovka — LLM Traffic Inspector</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div id="topbar">
+  <div id="status-dot"></div>
+  <h1>Claudovka</h1>
+  <span id="counter">0 conversations</span>
+  <input id="search" type="search" placeholder="Filter conversations…">
+</div>
+
+<div id="main">
+  <div id="conv-list">
+    <!-- Conversation entries injected by app.js -->
+  </div>
+
+  <div id="detail">
+    <div id="detail-header">
+      <h2>Select a conversation</h2>
+      <div id="detail-meta"></div>
+    </div>
+    <div id="messages">
+      <div class="empty-state">Select a conversation from the left panel</div>
+    </div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>

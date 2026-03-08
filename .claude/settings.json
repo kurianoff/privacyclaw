@@ -1,0 +1,38 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo clippy -- -D warnings)",
+      "Bash(openspec archive add-structured-logging --yes)",
+      "Bash(lsof -i :4443)",
+      "Bash(openssl s_client -connect 127.0.0.1:4443 -servername api.anthropic.com)",
+      "Bash(grep -v \"^warning\\\\|^ -->\\\\|^  |\\\\|^7\\\\|^8\\\\|^  =\\\\|^$\\\\|Finished\\\\|Running\\\\|Compiling\")",
+      "Bash(sudo sed -i '' 's/^#\\\\\\(127.0.0.1.*anthropic\\\\\\)/\\\\1/; s/^#\\\\\\(127.0.0.1.*openai\\\\\\)/\\\\1/' /etc/hosts)",
+      "Bash(CA_PATH=\"/Users/constantine/Library/Application Support/claudovka/ca/ca.pem\")",
+      "Bash(NODE_EXTRA_CA_CERTS=\"$CA_PATH\" claude --version)",
+      "Read(//Users/constantine/.npm/bin/**)",
+      "Read(//usr/local/bin/**)",
+      "Read(//usr/**)",
+      "Read(//opt/**)",
+      "Bash(NODE_EXTRA_CA_CERTS=\"$CA_PATH\" claudesp --version)",
+      "Read(//Users/constantine/.local/bin/**)",
+      "Read(//Users/constantine/.claude-sneakpeek/claudesp/config/**)",
+      "Read(//Users/constantine/github/kurianoff/kladovka/claudovka/**)",
+      "Bash(grep -v \"^$\")",
+      "Bash(claudesp --print \"print only: NODE_EXTRA_CA_CERTS=$NODE_EXTRA_CA_CERTS\" --no-stream)",
+      "Bash(rm -f /tmp/claudesp_test2.out)",
+      "Bash(claudesp --print \"reply: one word only\")",
+      "Read(//tmp/**)",
+      "Read(//Users/constantine/.claude/**)",
+      "Bash(openspec validate add-test-coverage --strict)",
+      "Bash(cargo test test_anthropic_message_stop)",
+      "Bash(git init)",
+      "Bash(git remote add origin git@github.com:kurianoff/claudovka.git)",
+      "Bash(git branch -m main)",
+      "Bash(git add -A)"
+    ],
+    "additionalDirectories": [
+      "/Users/constantine/.claude-sneakpeek/claudesp/config",
+      "/Users/constantine/github/kurianoff/kladovka"
+    ]
+  }
+}

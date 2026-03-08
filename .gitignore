@@ -1,0 +1,12 @@
+# Rust build artifacts
+claudovka/target/
+
+# Editor
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# Secrets / local config
+*.key.pem
+ca.pem

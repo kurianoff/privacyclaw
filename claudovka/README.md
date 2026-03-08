@@ -1,0 +1,240 @@
+# claudovka
+
+Local MITM privacy proxy for LLM API traffic. Intercepts, logs, and displays conversations between your apps and LLM providers — without sending data anywhere.
+
+## What it does
+
+- Transparently intercepts HTTPS traffic to Anthropic, OpenAI, Google, Mistral, Groq
+- Parses streaming SSE responses in real time
+- Stores conversations locally in SQLite
+- Shows a live web dashboard at `http://localhost:8443`
+
+All data stays on your machine.
+
+## Two proxy modes
+
+### CONNECT mode (per-app)
+
+Configure a single app to use claudovka as an HTTP proxy:
+
+```sh
+export HTTPS_PROXY=http://127.0.0.1:8080
+```
+
+Works with any app that respects the standard proxy environment variable.
+
+### Network mode (system-wide)
+
+Intercepts traffic at the network layer via DNS override + port redirect. No per-app configuration needed — any process whose DNS resolves LLM domains to `127.0.0.1` is intercepted.
+
+## Install
+
+```sh
+cargo install --path claudovka/
+```
+
+Or build and run from source:
+
+```sh
+cd claudovka
+cargo build --release
+./target/release/claudovka --help
+```
+
+## Quick start
+
+### 1. Generate the CA
+
+```sh
+claudovka init --install-ca
+```
+
+This generates a local CA certificate and installs it into your OS trust store. On macOS this requires entering your password for `security add-trusted-cert`.
+
+The CA lives at `~/Library/Application Support/claudovka/ca/ca.pem` (macOS) or `~/.config/claudovka/ca/ca.pem` (Linux).
+
+### 2a. CONNECT mode
+
+```sh
+claudovka start
+export HTTPS_PROXY=http://127.0.0.1:8080
+```
+
+Point any LLM SDK or CLI at the proxy. Open `http://localhost:8443` to watch conversations live.
+
+### 2b. Network mode (macOS)
+
+Print setup instructions:
+
+```sh
+claudovka setup-network
+```
+
+Apply them (requires sudo for `/etc/hosts` and `pfctl`):
+
+```sh
+# Add DNS overrides
+sudo tee -a /etc/hosts <<'EOF'
+127.0.0.1  api.anthropic.com
+127.0.0.1  api.openai.com
+127.0.0.1  generativelanguage.googleapis.com
+127.0.0.1  api.mistral.ai
+127.0.0.1  api.groq.com
+EOF
+
+# Create pf redirect: port 443 → 4443
+sudo tee /etc/pf.anchors/claudovka <<'EOF'
+rdr pass on lo0 proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 4443
+EOF
+
+# Add anchor to pf.conf — rdr-anchor must go in the translation section,
+# before the filter anchor "com.apple/*" line
+sudo pfctl -ef /etc/pf.conf
+```
+
+For Node.js apps (including Claude Code), also set:
+
+```sh
+export NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/claudovka/ca/ca.pem"
+```
+
+Node.js ignores the macOS system keychain and requires this variable explicitly.
+Add it to `~/.zshrc` to make it permanent.
+
+### IPv6 — important caveat
+
+`/etc/hosts` only overrides **IPv4** (A records). Many LLM API domains also have AAAA records (real IPv6 addresses). Apps that prefer IPv6 — including the native macOS Claude binary — will resolve the real IPv6 address and bypass both the hosts override and the pf redirect entirely.
+
+To intercept IPv6 traffic as well, add loopback overrides and a second pf rule:
+
+```sh
+# /etc/hosts: add IPv6 loopback alongside IPv4
+sudo tee -a /etc/hosts <<'EOF'
+::1  api.anthropic.com
+::1  api.openai.com
+::1  generativelanguage.googleapis.com
+::1  api.mistral.ai
+::1  api.groq.com
+EOF
+
+# pf anchor: add IPv6 redirect alongside IPv4
+sudo tee /etc/pf.anchors/claudovka <<'EOF'
+rdr pass on lo0 inet  proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 4443
+rdr pass on lo0 inet6 proto tcp from any to ::1       port 443 -> ::1       port 4443
+EOF
+
+sudo pfctl -ef /etc/pf.conf
+```
+
+Then configure claudovka to listen on all interfaces (IPv4 + IPv6) by setting `listen = "[::]:4443"` in `config.toml` under `[network_proxy]`.
+
+Then start the proxy:
+
+```sh
+claudovka network-start
+```
+
+Open `http://localhost:8443` for the live dashboard.
+
+## Commands
+
+| Command | Description |
+| --- | --- |
+| `claudovka init [--install-ca]` | Generate CA; optionally install into OS trust store |
+| `claudovka start` | Start CONNECT proxy (`:8080`) + dashboard (`:8443`) |
+| `claudovka network-start` | Start network proxy (`:4443`) + dashboard (`:8443`) |
+| `claudovka setup-network` | Print `/etc/hosts` + pf rules for network mode |
+| `claudovka ca-path` | Print path to CA certificate |
+| `claudovka reset-ca` | Delete CA and generate a new one |
+| `claudovka export --format json --output out.json` | Export conversation log |
+
+## Configuration
+
+Copy `config.example.toml` and pass it with `--config`:
+
+```sh
+claudovka --config config.toml start
+```
+
+```toml
+[proxy]
+listen = "127.0.0.1:8080"      # CONNECT proxy address
+dashboard = "127.0.0.1:8443"   # Dashboard address
+
+[intercept]
+# Domains to MITM; all other HTTPS is passed through unchanged
+domains = [
+  "api.anthropic.com",
+  "api.openai.com",
+  "generativelanguage.googleapis.com",
+  "api.mistral.ai",
+  "api.groq.com",
+]
+
+[network_proxy]
+listen = "127.0.0.1:4443"
+enabled = false                 # Set true to auto-start with `claudovka start`
+
+[storage]
+path = "~/.config/claudovka/data.db"
+max_size_mb = 500
+retention_days = 30
+
+[logging]
+level = "info"                  # trace | debug | info | warn | error
+```
+
+## Removing
+
+To stop intercepting traffic and undo system changes:
+
+```sh
+# Remove /etc/hosts entries (delete the claudovka block)
+sudo nano /etc/hosts
+
+# Remove pf anchor
+sudo rm /etc/pf.anchors/claudovka
+# Remove the two claudovka lines from /etc/pf.conf, then reload:
+sudo pfctl -ef /etc/pf.conf
+
+# Remove CA from trust store
+sudo security remove-trusted-cert -d "$HOME/Library/Application Support/claudovka/ca/ca.pem"
+```
+
+## How it works
+
+**CONNECT mode**: Acts as an HTTP proxy. When a client sends `CONNECT api.anthropic.com:443`, claudovka generates a leaf certificate signed by its local CA, performs TLS termination, then opens a real TLS connection upstream and proxies the decrypted traffic. Intercepted domains get MITM'd; everything else is tunneled through unchanged.
+
+**Network mode**: Uses DNS override (`/etc/hosts`) to redirect LLM API hostnames to `127.0.0.1`, and a `pf` redirect rule to forward port 443 → 4443. claudovka listens on `:4443`, reads the TLS SNI from the ClientHello to determine the target domain, then performs the same MITM logic.
+
+Certificates are generated on demand and cached in memory. The CA private key never leaves your machine.
+
+## Architecture
+
+```text
+claudovka/src/
+├── main.rs          CLI (clap), startup, task orchestration
+├── config.rs        TOML config
+├── ca/
+│   ├── mod.rs       CA generation, disk I/O, OS trust store install
+│   └── cert_gen.rs  Per-domain leaf cert generation, CertCache, SniCertResolver
+├── proxy/
+│   ├── mod.rs       CONNECT proxy listener
+│   ├── connect.rs   HTTP CONNECT handler
+│   ├── intercept.rs Request/response MITM + storage + WebSocket push
+│   ├── network.rs   Network-mode listener (SNI-based)
+│   └── passthrough.rs  Transparent tunnel for non-intercepted domains
+├── parser/
+│   ├── sse.rs       Server-Sent Events streaming parser
+│   ├── anthropic.rs Anthropic message extraction
+│   ├── openai.rs    OpenAI message extraction
+│   └── google.rs    Google Gemini message extraction
+├── storage/         SQLite store (rusqlite)
+└── dashboard/       HTTP + WebSocket server, embedded assets
+```
+
+## Requirements
+
+- Rust 1.75+
+- macOS (network mode tested); Linux supported for CONNECT mode
+- `sudo` access for CA trust store install and pf rules (network mode)
