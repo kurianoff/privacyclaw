@@ -93,5 +93,5 @@
 - [x] 6.8 Integration: `tests/integration/t3_standalone_no_detection_test.rs` — SLM returns no `§` markers:
   - Assert `process_request_body_async` returns `None`.
   - Assert `handle_c2u_pii` still injects `SYSTEM_REMINDER` into the forwarded body.
-- [ ] 6.9 Run `cargo test` and fix all compilation errors and test failures before marking this complete.
-- [ ] 6.10 Run `cargo clippy -- -D warnings` and fix all warnings.
+- [x] 6.9 Run `cargo test` and fix all compilation errors and test failures before marking this complete.
+- [x] 6.10 Run `cargo clippy -- -D warnings` and fix all warnings.

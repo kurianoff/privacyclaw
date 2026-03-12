@@ -1030,11 +1030,11 @@ mod tests {
         assert!(result.is_none(), "HTTP 500 must return None, got: {:?}", result);
     }
 
-    /// Response with no § returns Some with empty pairs (no PII detected).
-    /// The spec says detect_and_rewrite returns None only on HTTP error/timeout,
-    /// not on clean "no PII" responses. The implementation returns Some((text, [])).
+    /// Response with no § markers returns None (no PII detected).
+    /// The implementation returns None when the SLM response contains no § markers,
+    /// treating "no markers" as indistinguishable from a detection failure.
     #[tokio::test]
-    async fn detect_and_rewrite_no_section_sign_returns_some_empty_pairs() {
+    async fn detect_and_rewrite_no_section_sign_returns_none() {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
 

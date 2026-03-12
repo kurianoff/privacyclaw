@@ -490,12 +490,14 @@ mod tests {
 
     #[tokio::test]
     async fn patch_tier3_without_tier2_is_error() {
+        // {regex:true, ner:false, slm:true} — T3 present but T2 absent, T1 present.
+        // This must be rejected by the T3-depends-on-T1+T2 rule (validate_pii_tiers line ~403).
         let mgr = default_mgr();
         let err = mgr
-            .patch(serde_json::json!({ "pii": { "tiers": { "regex": false, "ner": true, "slm": true } } }))
+            .patch(serde_json::json!({ "pii": { "tiers": { "regex": true, "ner": false, "slm": true } } }))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Tier 2 depends on Tier 1"));
+        assert!(err.to_string().contains("Tier 3 depends on Tier 1 + Tier 2"));
     }
 
     #[tokio::test]
