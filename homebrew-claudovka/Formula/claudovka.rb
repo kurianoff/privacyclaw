@@ -25,11 +25,44 @@ class Claudovka < Formula
     log_path var/"log/claudovka.log"
     error_log_path var/"log/claudovka.log"
     working_dir var
+    environment_variables PATH: std_service_path_env
   end
 
   def post_install
     # Generate CA certificate if not already present.
-    system bin/"claudovka", "init" unless (ENV["HOME"] + "/Library/Application Support/claudovka/ca/ca.pem").exist?
+    system bin/"claudovka", "init" unless Pathname(ENV["HOME"]).join("Library/Application Support/claudovka/ca/ca.pem").exist?
+  end
+
+  def caveats
+    <<~EOS
+      To initialize the CA certificate:
+        claudovka init
+        claudovka init --install-ca   # trust in macOS keychain
+
+      To enable Tier 3 standalone PII protection, create:
+        ~/Library/Application Support/claudovka/config.toml
+
+      with contents:
+        [pii]
+        mode = "replace"
+
+        [pii.tiers]
+        regex = false
+        ner   = false
+        slm   = true
+
+        [pii.slm]
+        endpoint   = "http://127.0.0.1:16442"
+        timeout_ms = 5000
+
+      T3 standalone requires a running llama-server (llama.cpp) on port 16442:
+        llama-server --model /path/to/model.gguf --port 16442 --ctx-size 2048
+
+      Then start the proxy:
+        claudovka start
+        # or as a background service:
+        brew services start #{name}
+    EOS
   end
 
   test do

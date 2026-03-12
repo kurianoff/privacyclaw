@@ -52,9 +52,6 @@ enum Commands {
         /// Enable PII replace mode (Tier 1+2)
         #[arg(long)]
         pii: bool,
-        /// Also enable Tier 3 SLM sidecar
-        #[arg(long)]
-        pii_llm: bool,
         /// Show menu bar icon instead of blocking in terminal (macOS + tray feature)
         #[arg(long)]
         tray: bool,
@@ -63,8 +60,6 @@ enum Commands {
     NetworkStart {
         #[arg(long)]
         pii: bool,
-        #[arg(long)]
-        pii_llm: bool,
     },
     /// Print /etc/hosts entries and macOS pf rules for network mode setup
     SetupNetwork,
@@ -188,11 +183,11 @@ async fn async_main(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Init { install_ca } => cmd_init(&cfg, install_ca).await,
-        Commands::Start { pii, pii_llm, .. } => {
-            cmd_start(cfg, cfg_mgr, pii, pii_llm, tray_shutdown).await
+        Commands::Start { pii, .. } => {
+            cmd_start(cfg, cfg_mgr, pii, tray_shutdown).await
         }
-        Commands::NetworkStart { pii, pii_llm } => {
-            cmd_network_start(cfg, cfg_mgr, pii, pii_llm).await
+        Commands::NetworkStart { pii } => {
+            cmd_network_start(cfg, cfg_mgr, pii).await
         }
         Commands::SetupNetwork    => cmd_setup_network(&cfg),
         Commands::CaPath          => cmd_ca_path(&cfg),
@@ -234,8 +229,8 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let (pii_flag, pii_llm_flag) = match &cli.command {
-        Commands::Start { pii, pii_llm, .. } => (*pii, *pii_llm),
+    let pii_flag = match &cli.command {
+        Commands::Start { pii, .. } => *pii,
         _ => unreachable!(),
     };
 
@@ -256,7 +251,7 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         let cfg_mgr   = ConfigManager::new(cfg, Some(config_path));
         let shutdown2 = shutdown.clone();
         rt.spawn(async move {
-            if let Err(e) = cmd_start(cfg2, cfg_mgr, pii_flag, pii_llm_flag, shutdown2).await {
+            if let Err(e) = cmd_start(cfg2, cfg_mgr, pii_flag, shutdown2).await {
                 tracing::error!(err = %e, "proxy error");
             }
         });
@@ -393,7 +388,6 @@ async fn cmd_start(
     cfg: Config,
     cfg_mgr: Arc<ConfigManager>,
     pii_flag: bool,
-    _pii_llm: bool,
     tray_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let ca_dir = default_ca_dir();
@@ -504,7 +498,7 @@ async fn cmd_start(
     Ok(())
 }
 
-async fn cmd_network_start(cfg: Config, cfg_mgr: Arc<ConfigManager>, pii_flag: bool, _pii_llm: bool) -> Result<()> {
+async fn cmd_network_start(cfg: Config, cfg_mgr: Arc<ConfigManager>, pii_flag: bool) -> Result<()> {
     let ca_dir = default_ca_dir();
     let bundle = ca::load_ca(&ca_dir)?
         .context("CA not initialized. Run `claudovka init` first.")?;

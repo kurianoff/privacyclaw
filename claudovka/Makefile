@@ -2,7 +2,7 @@ VERSION := $(shell cargo metadata --no-deps --format-version 1 | python3 -c "imp
 ARCH    := $(shell uname -m)
 DIST    := dist
 
-.PHONY: all build release test clean app pkg dmg tap-update-version tap-audit
+.PHONY: all build release test clean app pkg dmg tap-update-version tap-audit brew-package
 
 all: build
 
@@ -112,6 +112,19 @@ dmg: app
 	  -ov -format UDZO \
 	  $(DIST)/$(DMG_NAME)
 	@echo "DMG: $(DIST)/$(DMG_NAME)"
+
+# ── Homebrew tarball + SHA ────────────────────────────────────────────────────
+
+TARBALL := /tmp/claudovka-$(VERSION)-arm64-apple-darwin.tar.gz
+
+brew-package:
+	cargo build --release --target aarch64-apple-darwin
+	mkdir -p $(DIST)
+	cp target/aarch64-apple-darwin/release/claudovka $(DIST)/claudovka
+	tar -czf $(TARBALL) -C $(DIST) claudovka
+	@echo "Tarball: $(TARBALL)"
+	@echo "SHA256:  $$(shasum -a 256 $(TARBALL) | awk '{print $$1}')"
+	@echo "Update homebrew-claudovka/Formula/claudovka.rb with the SHA above."
 
 # ── Homebrew tap files ────────────────────────────────────────────────────────
 
