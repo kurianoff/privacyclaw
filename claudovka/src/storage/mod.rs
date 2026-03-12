@@ -24,6 +24,13 @@ pub struct Message {
     pub content: String,
     pub tokens_in: Option<i64>,
     pub tokens_out: Option<i64>,
+    /// For requests: the PII-replaced version sent to the LLM.
+    /// For responses: the raw LLM response before PII restoration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub content_masked: Option<String>,
+    /// True when the PII pipeline ran on this message; false when passthrough; None for legacy.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pii_processed: Option<bool>,
 }
 
 /// Vault record as stored on disk (mirrors pii::vault::VaultRecord).
@@ -32,6 +39,24 @@ pub struct StoredVaultRecord {
     pub original: String,
     pub synthetic: String,
     pub pii_type: String, // stored as label string
+    /// Tier that detected this PII (1=regex, 2=NER, 3=SLM).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tier: Option<u8>,
+    /// Detection confidence (0.0–1.0). 0.0 means legacy record where confidence was not stored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub confidence: Option<f32>,
+}
+
+/// A single per-message PII detection record.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MessageDetection {
+    pub message_id: String,
+    pub entity_type: String,
+    /// Type label (e.g. `[EMAIL]`), not the plaintext original.
+    pub original_masked: String,
+    pub synthetic: String,
+    pub tier: u8,
+    pub confidence: f32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -177,9 +202,9 @@ impl Store {
         Ok(())
     }
 
-    /// Returns up to 10 conversations, newest first.
+    /// Returns up to `limit` conversations, newest first.
     /// Reads only line 1 of each file — O(N_files × header_size).
-    pub fn list_conversations(&self) -> Result<Vec<Conversation>> {
+    pub fn list_conversations(&self, limit: usize) -> Result<Vec<Conversation>> {
         let mut entries: Vec<_> = std::fs::read_dir(&self.logs_dir)?
             .flatten()
             .filter(|e| {
@@ -193,7 +218,7 @@ impl Store {
         // Filenames start with ISO timestamp — descending sort = newest first.
         entries.sort_by_key(|b| std::cmp::Reverse(b.file_name()));
         let total_files = entries.len();
-        entries.truncate(10);
+        entries.truncate(limit);
 
         let mut result = Vec::new();
         for entry in entries {
@@ -307,7 +332,7 @@ impl Store {
         &self,
         conv_id: &str,
         rng_seed: u64,
-        records: &[(String, String)],
+        records: &[(String, String, String, u8, f32)],
     ) -> Result<()> {
         let Some(path) = self.conv_file_path(conv_id) else {
             return Ok(());
@@ -318,20 +343,22 @@ impl Store {
             rng_seed,
             mappings: records
                 .iter()
-                .map(|(orig, synth)| StoredVaultRecord {
+                .map(|(orig, synth, pii_type, tier, conf)| StoredVaultRecord {
                     original: orig.clone(),
                     synthetic: synth.clone(),
-                    pii_type: String::new(),
+                    pii_type: pii_type.clone(),
+                    tier: Some(*tier),
+                    confidence: Some(*conf),
                 })
                 .collect(),
         };
         let vault_line = serde_json::to_string(&persisted)? + "\n";
 
-        // Read existing file lines.
+        let _guard = self.write_lock.lock().unwrap();
+
+        // Read existing file lines inside the lock to avoid TOCTOU races.
         let content = std::fs::read_to_string(&path)
             .with_context(|| format!("read {:?} for vault save", path))?;
-
-        let _guard = self.write_lock.lock().unwrap();
 
         // Check if a vault line already exists.
         let mut lines: Vec<&str> = content.lines().collect();
@@ -340,8 +367,12 @@ impl Store {
         if let Some(idx) = existing_idx {
             lines[idx] = vault_line.trim_end_matches('\n');
             let new_content = lines.join("\n") + "\n";
-            std::fs::write(&path, new_content.as_bytes())
-                .with_context(|| format!("rewrite {:?} for vault update", path))?;
+            // Atomic rewrite: write to a temp file next to the target, then rename.
+            let tmp_path = path.with_extension("ndjson.tmp");
+            std::fs::write(&tmp_path, new_content.as_bytes())
+                .with_context(|| format!("write tmp {:?} for vault update", tmp_path))?;
+            std::fs::rename(&tmp_path, &path)
+                .with_context(|| format!("rename {:?} → {:?}", tmp_path, path))?;
         } else {
             // Append vault line to end of file.
             let mut file = std::fs::OpenOptions::new()
@@ -353,6 +384,80 @@ impl Store {
         }
 
         Ok(())
+    }
+
+    /// Append per-message detection records as `"type":"detection"` NDJSON lines.
+    pub fn insert_detections(&self, conv_id: &str, detections: &[MessageDetection]) -> Result<()> {
+        if detections.is_empty() {
+            return Ok(());
+        }
+        let Some(path) = self.conv_file_path(conv_id) else {
+            tracing::warn!(conv_id = %conv_id, "storage: insert_detections: no file found");
+            return Ok(());
+        };
+
+        let mut buf = String::new();
+        for det in detections {
+            let line = serde_json::json!({
+                "type": "detection",
+                "message_id": det.message_id,
+                "entity_type": det.entity_type,
+                "original_masked": det.original_masked,
+                "synthetic": det.synthetic,
+                "tier": det.tier,
+                "confidence": det.confidence,
+            });
+            buf.push_str(&serde_json::to_string(&line)?);
+            buf.push('\n');
+        }
+
+        let _guard = self.write_lock.lock().unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .with_context(|| format!("open for detection append {:?}", path))?;
+        file.write_all(buf.as_bytes())
+            .with_context(|| format!("append detections to {:?}", path))?;
+        tracing::info!(conv_id = %conv_id, count = detections.len(), "storage: insert_detections ok");
+        Ok(())
+    }
+
+    /// Load detection records from a conversation's NDJSON file.
+    /// When `message_id` is Some, only records with that message_id are returned.
+    /// Returns an empty vec (not error) when no detection lines are found.
+    pub fn load_detections(
+        &self,
+        conv_id: &str,
+        message_id: Option<&str>,
+    ) -> Result<Vec<MessageDetection>> {
+        tracing::debug!(conv_id = %conv_id, message_id_filter = ?message_id, "storage: load_detections");
+        let Some(path) = self.conv_file_path(conv_id) else {
+            return Ok(vec![]);
+        };
+        let file = std::fs::File::open(&path)
+            .with_context(|| format!("open {:?} for detection load", path))?;
+        let reader = std::io::BufReader::new(file);
+        let mut result = Vec::new();
+        for line in reader.lines() {
+            let line = line?;
+            if !line.contains("\"type\":\"detection\"") {
+                continue;
+            }
+            match serde_json::from_str::<MessageDetection>(&line) {
+                Ok(det) => {
+                    if let Some(mid) = message_id {
+                        if det.message_id != mid {
+                            continue;
+                        }
+                    }
+                    tracing::trace!(conv_id = %conv_id, message_id = %det.message_id, entity_type = %det.entity_type, "storage: loaded detection record");
+                    result.push(det);
+                }
+                Err(e) => tracing::warn!("Skipping malformed detection line: {}", e),
+            }
+        }
+        tracing::debug!(conv_id = %conv_id, loaded_count = result.len(), "storage: load_detections complete");
+        Ok(result)
     }
 
     /// Load vault state from a conversation's NDJSON file.
@@ -371,9 +476,21 @@ impl Store {
             let line = line?;
             if line.contains("\"type\":\"vault\"") {
                 match serde_json::from_str::<PersistedVault>(&line) {
-                    Ok(pv) => return Ok(Some((pv.rng_seed, pv.mappings))),
+                    Ok(pv) => {
+                        for m in &pv.mappings {
+                            tracing::trace!(
+                                conv_id = %conv_id,
+                                original_len = m.original.len(),
+                                synthetic_len = m.synthetic.len(),
+                                entity_type = %m.pii_type,
+                                tier = ?m.tier,
+                                "vault: restored mapping from disk"
+                            );
+                        }
+                        return Ok(Some((pv.rng_seed, pv.mappings)));
+                    }
                     Err(e) => {
-                        tracing::warn!("Malformed vault line in {:?}: {}", path, e);
+                        tracing::warn!(err = %e, path = ?path, "vault: malformed vault line");
                         return Ok(None);
                     }
                 }
@@ -414,6 +531,8 @@ mod tests {
             content: "test content".to_string(),
             tokens_in: None,
             tokens_out: None,
+            content_masked: None,
+            pii_processed: None,
         }
     }
 
@@ -443,6 +562,8 @@ mod tests {
                 content: format!("content-{}", i),
                 tokens_in: None,
                 tokens_out: None,
+                content_masked: None,
+                pii_processed: None,
             };
             store.insert_message(&msg).unwrap();
         }
@@ -468,6 +589,8 @@ mod tests {
                 content: format!("content-{}", i),
                 tokens_in: None,
                 tokens_out: None,
+                content_masked: None,
+                pii_processed: None,
             })
             .collect();
         store.batch_insert_messages(&msgs).unwrap();
@@ -490,7 +613,7 @@ mod tests {
             store.insert_conversation(&conv).unwrap();
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
-        let convs = store.list_conversations().unwrap();
+        let convs = store.list_conversations(10).unwrap();
         assert_eq!(convs.len(), 10, "list_conversations returns at most 10");
     }
 
@@ -565,6 +688,8 @@ mod tests {
                         content: format!("task-{} msg-{}", task_id, i),
                         tokens_in: None,
                         tokens_out: None,
+                        content_masked: None,
+                        pii_processed: None,
                     })
                     .collect();
                 store_clone.batch_insert_messages(&msgs).unwrap();
@@ -651,7 +776,7 @@ mod tests {
                 "conv-vault-basic",
                 42,
                 &[
-                    ("alice@acme.com".to_string(), "bob@example.com".to_string()),
+                    ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32),
                 ],
             )
             .unwrap();
@@ -699,7 +824,7 @@ mod tests {
             .save_vault(
                 "conv-vault-overwrite",
                 1,
-                &[("first@orig.com".to_string(), "first@synth.com".to_string())],
+                &[("first@orig.com".to_string(), "first@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32)],
             )
             .unwrap();
 
@@ -708,7 +833,7 @@ mod tests {
             .save_vault(
                 "conv-vault-overwrite",
                 2,
-                &[("second@orig.com".to_string(), "second@synth.com".to_string())],
+                &[("second@orig.com".to_string(), "second@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32)],
             )
             .unwrap();
 
@@ -736,7 +861,7 @@ mod tests {
         store.insert_conversation(&conv).unwrap();
 
         // Save with an empty mapping slice — must not crash.
-        store.save_vault("conv-vault-empty", 0, &[]).unwrap();
+        store.save_vault("conv-vault-empty", 0, &[] as &[(String, String, String, u8, f32)]).unwrap();
 
         let result = store.load_vault("conv-vault-empty").unwrap();
         assert!(result.is_some(), "empty vault should still produce a vault line");
@@ -751,11 +876,14 @@ mod tests {
         let conv = make_conv("conv-vault-multi", "anthropic", "fp-vault-multi");
         store.insert_conversation(&conv).unwrap();
 
-        let mappings: Vec<(String, String)> = (0..5)
+        let mappings: Vec<(String, String, String, u8, f32)> = (0..5)
             .map(|i| {
                 (
                     format!("original-{}@acme.com", i),
                     format!("synthetic-{}@example.com", i),
+                    "email".to_string(),
+                    1u8,
+                    1.0f32,
                 )
             })
             .collect();
@@ -776,6 +904,288 @@ mod tests {
                 .iter()
                 .any(|r| r.original == expected_orig && r.synthetic == expected_synth);
             assert!(found, "record {i} not found in loaded vault");
+        }
+    }
+
+    // ── 11.1 Message round-trips with new fields ──────────────────────────────
+
+    #[test]
+    fn message_with_pii_fields_round_trips() {
+        let msg = Message {
+            id: "msg-pii".to_string(),
+            conversation_id: "conv-1".to_string(),
+            direction: "request".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            role: Some("user".to_string()),
+            content: "Hello, my email is alice@acme.com".to_string(),
+            tokens_in: None,
+            tokens_out: None,
+            content_masked: Some("Hello, my email is [EMAIL]".to_string()),
+            pii_processed: Some(true),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+
+        // Both optional fields must appear when set.
+        assert!(json.contains("\"content_masked\""), "content_masked absent: {json}");
+        assert!(json.contains("\"pii_processed\""), "pii_processed absent: {json}");
+
+        let msg2: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg2.content_masked.as_deref(), Some("Hello, my email is [EMAIL]"));
+        assert_eq!(msg2.pii_processed, Some(true));
+    }
+
+    #[test]
+    fn message_pii_processed_false_serialises() {
+        let msg = Message {
+            id: "msg-no-pii".to_string(),
+            conversation_id: "conv-1".to_string(),
+            direction: "request".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            role: None,
+            content: "plain text".to_string(),
+            tokens_in: None,
+            tokens_out: None,
+            content_masked: None,
+            pii_processed: Some(false),
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        // pii_processed: false must appear in JSON (it is Some, just false).
+        assert!(json.contains("\"pii_processed\":false"), "pii_processed:false absent: {json}");
+        // content_masked: None must be absent (skip_serializing_if).
+        assert!(!json.contains("\"content_masked\""), "None content_masked must be absent: {json}");
+
+        let msg2: Message = serde_json::from_str(&json).unwrap();
+        assert_eq!(msg2.pii_processed, Some(false));
+        assert!(msg2.content_masked.is_none());
+    }
+
+    #[test]
+    fn message_all_pii_fields_none_json_omits_them() {
+        let msg = Message {
+            id: "msg-none".to_string(),
+            conversation_id: "conv-1".to_string(),
+            direction: "request".to_string(),
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            role: None,
+            content: "test".to_string(),
+            tokens_in: None,
+            tokens_out: None,
+            content_masked: None,
+            pii_processed: None,
+        };
+        let json = serde_json::to_string(&msg).unwrap();
+        assert!(!json.contains("\"content_masked\""),
+            "None content_masked must not appear: {json}");
+        assert!(!json.contains("\"pii_processed\""),
+            "None pii_processed must not appear: {json}");
+    }
+
+    /// Legacy JSON produced before these fields existed must deserialise
+    /// with both optional fields set to `None` (not an error).
+    #[test]
+    fn message_legacy_json_without_new_fields_deserialises_as_none() {
+        let legacy = r#"{
+            "id":"legacy-1",
+            "conversation_id":"conv-1",
+            "direction":"request",
+            "timestamp":"2026-01-01T00:00:00Z",
+            "role":"user",
+            "content":"legacy message"
+        }"#;
+        let msg: Message = serde_json::from_str(legacy).unwrap();
+        assert!(msg.content_masked.is_none(),
+            "legacy JSON: content_masked should be None, got {:?}", msg.content_masked);
+        assert!(msg.pii_processed.is_none(),
+            "legacy JSON: pii_processed should be None, got {:?}", msg.pii_processed);
+    }
+
+    // ── 11.2 StoredVaultRecord backward compat ────────────────────────────────
+
+    #[test]
+    fn stored_vault_record_legacy_json_missing_confidence_and_tier_is_none() {
+        let json = r#"{"original":"a@a.com","synthetic":"x@x.com","pii_type":"email"}"#;
+        let rec: StoredVaultRecord = serde_json::from_str(json)
+            .expect("legacy StoredVaultRecord must deserialise without error");
+        assert!(rec.confidence.is_none(),
+            "missing confidence field should be None, got {:?}", rec.confidence);
+        assert!(rec.tier.is_none(),
+            "missing tier field should be None, got {:?}", rec.tier);
+    }
+
+    #[test]
+    fn stored_vault_record_with_confidence_round_trips() {
+        let rec = StoredVaultRecord {
+            original: "alice@acme.com".to_string(),
+            synthetic: "bob@example.com".to_string(),
+            pii_type: "email".to_string(),
+            tier: Some(1),
+            confidence: Some(0.88),
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        assert!(json.contains("\"confidence\""), "confidence missing from JSON: {json}");
+
+        let rec2: StoredVaultRecord = serde_json::from_str(&json).unwrap();
+        assert_eq!(rec2.confidence, Some(0.88f32));
+        assert_eq!(rec2.tier, Some(1u8));
+    }
+
+    #[test]
+    fn stored_vault_record_none_fields_omitted_from_json() {
+        let rec = StoredVaultRecord {
+            original: "x".to_string(),
+            synthetic: "y".to_string(),
+            pii_type: "email".to_string(),
+            tier: None,
+            confidence: None,
+        };
+        let json = serde_json::to_string(&rec).unwrap();
+        assert!(!json.contains("\"confidence\""), "None confidence must be absent: {json}");
+        assert!(!json.contains("\"tier\""), "None tier must be absent: {json}");
+    }
+
+    // ── 11.3 Detection log round-trip ─────────────────────────────────────────
+
+    #[test]
+    fn insert_and_load_detections_unfiltered() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-det-unit", "anthropic", "fp-det-unit");
+        store.insert_conversation(&conv).unwrap();
+
+        let dets = vec![
+            super::MessageDetection {
+                message_id: "m1".to_string(),
+                entity_type: "email".to_string(),
+                original_masked: "[EMAIL]".to_string(),
+                synthetic: "synth@example.com".to_string(),
+                tier: 1,
+                confidence: 0.99,
+            },
+            super::MessageDetection {
+                message_id: "m2".to_string(),
+                entity_type: "phone".to_string(),
+                original_masked: "[PHONE]".to_string(),
+                synthetic: "555-000-0001".to_string(),
+                tier: 1,
+                confidence: 0.85,
+            },
+        ];
+        store.insert_detections("conv-det-unit", &dets).unwrap();
+
+        let loaded = store.load_detections("conv-det-unit", None).unwrap();
+        assert_eq!(loaded.len(), 2);
+    }
+
+    #[test]
+    fn insert_and_load_detections_filtered() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-det-filter", "anthropic", "fp-det-filter");
+        store.insert_conversation(&conv).unwrap();
+
+        let dets = vec![
+            super::MessageDetection {
+                message_id: "msg-a".to_string(),
+                entity_type: "email".to_string(),
+                original_masked: "[EMAIL]".to_string(),
+                synthetic: "s@e.com".to_string(),
+                tier: 1,
+                confidence: 1.0,
+            },
+            super::MessageDetection {
+                message_id: "msg-b".to_string(),
+                entity_type: "ssn".to_string(),
+                original_masked: "[SSN]".to_string(),
+                synthetic: "999-00-0001".to_string(),
+                tier: 1,
+                confidence: 0.9,
+            },
+        ];
+        store.insert_detections("conv-det-filter", &dets).unwrap();
+
+        let loaded = store.load_detections("conv-det-filter", Some("msg-a")).unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].entity_type, "email");
+    }
+
+    #[test]
+    fn load_detections_empty_file_returns_empty_vec() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-det-empty", "anthropic", "fp-det-empty");
+        store.insert_conversation(&conv).unwrap();
+
+        let loaded = store.load_detections("conv-det-empty", None).unwrap();
+        assert!(loaded.is_empty(), "empty conversation should return empty detections");
+    }
+
+    #[test]
+    fn load_detections_filter_no_match_returns_empty() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-det-nomatch", "anthropic", "fp-det-nomatch");
+        store.insert_conversation(&conv).unwrap();
+
+        let dets = vec![super::MessageDetection {
+            message_id: "existing".to_string(),
+            entity_type: "email".to_string(),
+            original_masked: "[EMAIL]".to_string(),
+            synthetic: "s@e.com".to_string(),
+            tier: 1,
+            confidence: 1.0,
+        }];
+        store.insert_detections("conv-det-nomatch", &dets).unwrap();
+
+        let loaded = store.load_detections("conv-det-nomatch", Some("no-such-message")).unwrap();
+        assert!(loaded.is_empty(), "non-matching filter must return empty vec");
+    }
+
+    // ── 3.3.2 Write-lock serialises concurrent appends ────────────────────────
+
+    #[tokio::test]
+    async fn test_write_lock_serializes_appends() {
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-serial", "anthropic", "fp-serial");
+        store.insert_conversation(&conv).unwrap();
+
+        let mut handles = Vec::new();
+        for task_id in 0..10 {
+            let store_clone = store.clone();
+            let handle = tokio::task::spawn_blocking(move || {
+                let msgs: Vec<Message> = (0..5)
+                    .map(|i| Message {
+                        id: format!("msg-{}-{}", task_id, i),
+                        conversation_id: "conv-serial".to_string(),
+                        direction: "request".to_string(),
+                        timestamp: "2026-03-08T00:00:00Z".to_string(),
+                        role: Some("user".to_string()),
+                        content: format!("task-{} msg-{}", task_id, i),
+                        tokens_in: None,
+                        tokens_out: None,
+                        content_masked: None,
+                        pii_processed: None,
+                    })
+                    .collect();
+                store_clone.batch_insert_messages(&msgs).unwrap();
+            });
+            handles.push(handle);
+        }
+        for h in handles {
+            h.await.unwrap();
+        }
+
+        let messages = store.get_messages("conv-serial").unwrap();
+        assert_eq!(
+            messages.len(),
+            50,
+            "Expected 50 messages (10 tasks × 5 messages), got {}",
+            messages.len()
+        );
+        // Verify no corruption: every message must deserialise correctly (already
+        // guaranteed by get_messages returning Ok, but also check IDs are non-empty).
+        for msg in &messages {
+            assert!(!msg.id.is_empty(), "message id must not be empty");
+            assert_eq!(
+                msg.conversation_id, "conv-serial",
+                "conversation_id mismatch: {:?}",
+                msg.id
+            );
         }
     }
 }

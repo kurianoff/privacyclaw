@@ -10,3 +10,14 @@ claudovka/target/
 # Secrets / local config
 *.key.pem
 ca.pem
+.env
+*.env
+
+# Build distribution artifacts
+claudovka/dist/
+
+# Scratch / local files
+*.png
+
+# External repos (managed separately)
+mitmproxy/

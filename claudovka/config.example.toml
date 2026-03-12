@@ -1,6 +1,6 @@
 [proxy]
-listen = "127.0.0.1:8080"      # CONNECT proxy listen address
-dashboard = "127.0.0.1:8443"   # Web dashboard address
+listen = "127.0.0.1:16440"     # CONNECT proxy listen address
+dashboard = "127.0.0.1:16443"  # Web dashboard address
 
 [intercept]
 # Only MITM these domains. All other HTTPS is passed through transparently.
@@ -13,7 +13,7 @@ domains = [
 ]
 
 [network_proxy]
-listen = "127.0.0.1:4443"      # Network-level proxy port (map 443 → here via pf)
+listen = "127.0.0.1:16441"     # Network-level proxy port (map 443 → here via pf)
 enabled = false                 # Set true to also start in `claudovka start`
 
 [storage]
@@ -22,7 +22,10 @@ max_size_mb = 500                      # Auto-prune oldest conversations
 retention_days = 30                    # Auto-delete after N days
 
 [logging]
-level = "info"                        # trace | debug | info | warn | error
+level = "info"          # trace | debug | info | warn | error
+format = "text"         # json | text
+# file = "~/.config/claudovka/logs/claudovka.log"  # uncomment to enable file logging
+rotation = "daily"      # daily | hourly | never (only used when file is set)
 
 # ── PII Protection ─────────────────────────────────────────────────────────────
 # claudovka can detect and replace personally identifiable information (PII) in
@@ -57,7 +60,7 @@ regex = true
 # Requires a model to be installed first: claudovka models install gliner-small
 ner = false
 # Tier 3: SLM sidecar — delegates to a local small language model over HTTP.
-# Requires a running sidecar; see docs/PII-SETUP.md.
+# Requires a running sidecar; see USAGE_GUIDE.md.
 slm = false
 
 [pii.ner]
@@ -71,6 +74,6 @@ timeout_ms = 500
 
 [pii.slm]
 # HTTP endpoint of the SLM sidecar (Tier 3).
-endpoint = "http://127.0.0.1:8080"
+endpoint = "http://127.0.0.1:16442"
 # Maximum time in milliseconds to wait for the sidecar before skipping.
 timeout_ms = 5000

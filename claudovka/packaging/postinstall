@@ -1,0 +1,88 @@
+#!/bin/bash
+# claudovka .pkg postinstall script
+# Runs as root after files are placed on disk.
+set -euo pipefail
+
+BINARY="/usr/local/bin/claudovka"
+SHARE_DIR="/usr/local/share/claudovka"
+LAUNCH_DAEMONS_DIR="/Library/LaunchDaemons"
+PF_PLIST_SRC="$SHARE_DIR/com.claudovka.pf.plist"
+PF_PLIST_DEST="$LAUNCH_DAEMONS_DIR/com.claudovka.pf.plist"
+
+# ── Identify the actual logged-in user (not root) ─────────────────────────────
+# The postinstall script runs as root; $HOME is /var/root.
+# We resolve the console owner to get the real user's home and UID.
+ACTUAL_USER=$(stat -f "%Su" /dev/console 2>/dev/null || echo "")
+if [ -z "$ACTUAL_USER" ] || [ "$ACTUAL_USER" = "root" ]; then
+    echo "[claudovka] WARNING: could not detect logged-in user; manual setup may be required"
+    ACTUAL_USER="root"
+fi
+USER_HOME=$(eval echo "~$ACTUAL_USER")
+USER_ID=$(id -u "$ACTUAL_USER" 2>/dev/null || echo "0")
+
+CA_DIR="$USER_HOME/Library/Application Support/claudovka/ca"
+CA_PEM="$CA_DIR/ca.pem"
+LAUNCH_AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
+PROXY_PLIST_SRC="$SHARE_DIR/com.claudovka.proxy.plist"
+PROXY_PLIST_DEST="$LAUNCH_AGENTS_DIR/com.claudovka.proxy.plist"
+LOGS_DIR="$USER_HOME/Library/Logs/claudovka"
+
+echo "[claudovka] postinstall: starting (user=$ACTUAL_USER uid=$USER_ID)"
+
+# Create log dir owned by the real user.
+mkdir -p "$LOGS_DIR"
+chown "$ACTUAL_USER" "$LOGS_DIR" 2>/dev/null || true
+
+# ── CA generation (run as the actual user, not root) ──────────────────────────
+if [ -f "$CA_PEM" ]; then
+    echo "[claudovka] CA already exists — skipping generation"
+else
+    echo "[claudovka] Generating CA certificate..."
+    su -m "$ACTUAL_USER" -c "\"$BINARY\" init" 2>&1 || \
+        launchctl asuser "$USER_ID" su -m "$ACTUAL_USER" -c "\"$BINARY\" init"
+fi
+
+# Fix ownership of the entire claudovka data dir (handles reinstall cases).
+chown -R "$ACTUAL_USER" "$USER_HOME/Library/Application Support/claudovka" 2>/dev/null || true
+
+# Trust CA in System keychain.
+echo "[claudovka] Installing CA into System keychain..."
+if security add-trusted-cert -d -r trustRoot -k /Library/Keychains/System.keychain "$CA_PEM" 2>/dev/null; then
+    echo "[claudovka] CA trusted successfully"
+else
+    echo "[claudovka] WARNING: failed to trust CA — run 'claudovka init --install-ca' manually"
+fi
+
+# ── LaunchAgent (user proxy daemon) ───────────────────────────────────────────
+mkdir -p "$LAUNCH_AGENTS_DIR"
+chown "$ACTUAL_USER" "$LAUNCH_AGENTS_DIR" 2>/dev/null || true
+
+if [ -f "$PROXY_PLIST_SRC" ]; then
+    cp "$PROXY_PLIST_SRC" "$PROXY_PLIST_DEST"
+    # Expand log path (launchd does not expand ~ in plists).
+    sed -i '' "s|~/Library/Logs|$USER_HOME/Library/Logs|g" "$PROXY_PLIST_DEST"
+    chown "$ACTUAL_USER" "$PROXY_PLIST_DEST"
+
+    # Bootstrap into the user's GUI session (not root's session).
+    # launchctl bootstrap gui/<uid> is the modern macOS approach.
+    launchctl bootstrap gui/"$USER_ID" "$PROXY_PLIST_DEST" 2>/dev/null || \
+        launchctl asuser "$USER_ID" launchctl load -w "$PROXY_PLIST_DEST" 2>/dev/null || true
+    echo "[claudovka] LaunchAgent installed and started"
+else
+    echo "[claudovka] WARNING: LaunchAgent plist not found at $PROXY_PLIST_SRC"
+fi
+
+# ── pf LaunchDaemon (root daemon: re-applies anchor at boot) ──────────────────
+# The daemon only takes effect once the anchor file exists.
+if [ -f "$PF_PLIST_SRC" ]; then
+    cp "$PF_PLIST_SRC" "$PF_PLIST_DEST"
+    launchctl bootstrap system "$PF_PLIST_DEST" 2>/dev/null || \
+        launchctl load "$PF_PLIST_DEST" 2>/dev/null || true
+    echo "[claudovka] pf LaunchDaemon installed"
+else
+    echo "[claudovka] WARNING: pf plist not found at $PF_PLIST_SRC"
+fi
+
+echo "[claudovka] postinstall: complete"
+echo "[claudovka] Dashboard: http://localhost:16443"
+echo "[claudovka] To enable network interception: claudovka network-enable"

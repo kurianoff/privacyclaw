@@ -1,0 +1,101 @@
+#!/bin/bash
+# claudovka .pkg preremove script
+# Runs as root before files are removed from disk.
+# Reverses all system changes made by postinstall and 'claudovka network-enable'.
+set -uo pipefail   # -e intentionally omitted: continue even if a step fails
+
+BINARY="/usr/local/bin/claudovka"
+LAUNCH_DAEMONS_DIR="/Library/LaunchDaemons"
+PF_PLIST="$LAUNCH_DAEMONS_DIR/com.claudovka.pf.plist"
+PF_ANCHOR_FILE="/etc/pf.anchors/claudovka"
+
+# Resolve actual logged-in user (script runs as root).
+ACTUAL_USER=$(stat -f "%Su" /dev/console 2>/dev/null || echo "")
+[ -z "$ACTUAL_USER" ] || [ "$ACTUAL_USER" = "root" ] && ACTUAL_USER=$(logname 2>/dev/null || echo "")
+USER_HOME=$(eval echo "~$ACTUAL_USER")
+USER_ID=$(id -u "$ACTUAL_USER" 2>/dev/null || echo "0")
+LAUNCH_AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
+PROXY_PLIST="$LAUNCH_AGENTS_DIR/com.claudovka.proxy.plist"
+CA_PEM="$USER_HOME/Library/Application Support/claudovka/ca/ca.pem"
+
+ok()   { echo "[claudovka] ✓ $*"; }
+warn() { echo "[claudovka] ⚠ $*"; }
+fail() { echo "[claudovka] ✗ $*"; }
+
+echo "[claudovka] preremove: starting"
+
+# ── 1. Stop the running proxy (if any) ────────────────────────────────────────
+if "$BINARY" stop 2>/dev/null; then
+    ok "proxy stopped"
+else
+    warn "proxy was not running (or binary already gone)"
+fi
+
+# ── 2. Unload and remove the LaunchAgent ──────────────────────────────────────
+if [ -f "$PROXY_PLIST" ]; then
+    launchctl bootout gui/"$USER_ID" "$PROXY_PLIST" 2>/dev/null || \
+        launchctl asuser "$USER_ID" launchctl unload -w "$PROXY_PLIST" 2>/dev/null || true
+    rm -f "$PROXY_PLIST"
+    ok "LaunchAgent removed"
+else
+    warn "LaunchAgent already absent"
+fi
+
+# ── 3. Network proxy cleanup (pf + /etc/hosts) — only if enabled ──────────────
+if [ -f "$PF_ANCHOR_FILE" ]; then
+    echo "[claudovka] network proxy was enabled — reverting pf and /etc/hosts..."
+
+    # Flush the anchor rules.
+    pfctl -a claudovka -F all 2>/dev/null && ok "pf anchor flushed" || warn "pfctl flush had no rules"
+
+    # Remove claudovka lines from /etc/pf.conf.
+    if grep -q '# claudovka' /etc/pf.conf 2>/dev/null; then
+        grep -v '# claudovka' /etc/pf.conf > /tmp/pf.conf.clean \
+            && mv /tmp/pf.conf.clean /etc/pf.conf \
+            && pfctl -ef /etc/pf.conf 2>/dev/null \
+            && ok "pf.conf restored and reloaded" \
+            || fail "failed to restore /etc/pf.conf"
+    else
+        warn "no claudovka lines found in /etc/pf.conf"
+    fi
+
+    # Remove the anchor rule file.
+    rm -f "$PF_ANCHOR_FILE" && ok "anchor file removed"
+
+    # Remove claudovka lines from /etc/hosts.
+    if grep -q '# claudovka' /etc/hosts 2>/dev/null; then
+        grep -v '# claudovka' /etc/hosts > /tmp/hosts.clean \
+            && mv /tmp/hosts.clean /etc/hosts \
+            && ok "/etc/hosts cleaned" \
+            || fail "failed to clean /etc/hosts"
+    else
+        warn "no claudovka lines found in /etc/hosts"
+    fi
+else
+    warn "network proxy was not enabled — skipping pf and /etc/hosts cleanup"
+fi
+
+# ── 4. Unload and remove the pf LaunchDaemon ──────────────────────────────────
+if [ -f "$PF_PLIST" ]; then
+    launchctl bootout system "$PF_PLIST" 2>/dev/null || \
+        launchctl unload "$PF_PLIST" 2>/dev/null || true
+    rm -f "$PF_PLIST"
+    ok "pf LaunchDaemon removed"
+else
+    warn "pf LaunchDaemon already absent"
+fi
+
+# ── 5. Remove CA from System keychain ─────────────────────────────────────────
+if [ -f "$CA_PEM" ]; then
+    if security remove-trusted-cert -d "$CA_PEM" 2>/dev/null; then
+        ok "CA removed from System keychain"
+    else
+        warn "CA was not in System keychain (or removal failed)"
+    fi
+else
+    warn "CA file not found — skipping keychain removal"
+fi
+
+echo "[claudovka] preremove: complete"
+echo "[claudovka] Note: user data (~/.config/claudovka or ~/Library/Application Support/claudovka) is preserved."
+echo "[claudovka] To delete all data: rm -rf \"$HOME/Library/Application Support/claudovka\""

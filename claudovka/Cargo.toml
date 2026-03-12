@@ -1,6 +1,6 @@
 [package]
 name = "claudovka"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "Local MITM privacy proxy for LLM API traffic inspection"
 license = "MIT"
@@ -23,7 +23,8 @@ serde_json = "1"
 toml = "0.8"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "registry"] }
+tracing-appender = "0.2"
 uuid = { version = "1", features = ["v4"] }
 chrono = { version = "0.4", features = ["serde"] }
 tokio-tungstenite = "0.24"
@@ -44,10 +45,90 @@ fancy-regex = "0.13"
 fake = { version = "2.9", features = ["derive"] }
 rand = { version = "0.8", features = ["small_rng"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
+ort = { version = "=2.0.0-rc.10", features = ["download-binaries"], optional = true }
+tokenizers = { version = "0.19", optional = true }
+ndarray = { version = "0.16", optional = true }
+tray-icon = { version = "0.19", optional = true }
 
 [features]
-ort-ner = []
+ort-ner = ["dep:ort", "dep:tokenizers", "dep:ndarray"]
+# macOS menu-bar tray icon. Build with: cargo build --features tray
+# The tray module is cfg-gated to target_os = "macos"; this feature is a no-op on other OSes.
+tray = ["dep:tray-icon"]
 
 [dev-dependencies]
 tokio = { version = "1", features = ["full"] }
 tempfile = "3"
+tracing-test = { version = "0.2", features = ["no-env-filter"] }
+
+[[test]]
+name = "pii_roundtrip_test"
+path = "tests/integration/pii_roundtrip_test.rs"
+
+[[test]]
+name = "vault_persistence_test"
+path = "tests/integration/vault_persistence_test.rs"
+
+[[test]]
+name = "multiturn_consistency_test"
+path = "tests/integration/multiturn_consistency_test.rs"
+
+[[test]]
+name = "passthrough_no_pii_test"
+path = "tests/integration/passthrough_no_pii_test.rs"
+
+[[test]]
+name = "pii_proxy_intercept_test"
+path = "tests/integration/pii_proxy_intercept_test.rs"
+
+[[test]]
+name = "pii_config_tests"
+path = "tests/pii_config_tests.rs"
+
+# ── E2E process-level tests ───────────────────────────────────────────────────
+# These spawn the real binary; run with `cargo test --test e2e_init_test` etc.
+# They require `cargo build` to have run first (handled automatically by cargo test).
+
+[[test]]
+name = "e2e_init_test"
+path = "tests/e2e/init_test.rs"
+
+[[test]]
+name = "e2e_proxy_lifecycle_test"
+path = "tests/e2e/proxy_lifecycle_test.rs"
+
+[[test]]
+name = "network_proxy_test"
+path = "tests/e2e/network_proxy_test.rs"
+
+[[test]]
+name = "brew_formula_test"
+path = "tests/brew_formula_test.rs"
+
+[[test]]
+name = "pkg_build_test"
+path = "tests/pkg_build_test.rs"
+
+[[test]]
+name = "proxy_toggle_test"
+path = "tests/proxy_toggle_test.rs"
+
+[[test]]
+name = "t3_standalone_roundtrip"
+path = "tests/t3_standalone_roundtrip.rs"
+
+[[test]]
+name = "logging_instrumentation_tests"
+path = "tests/logging_instrumentation_tests.rs"
+
+[[test]]
+name = "stress_test"
+path = "tests/integration/stress_test.rs"
+
+[[test]]
+name = "detection_log_test"
+path = "tests/detection_log_test.rs"
+
+[[test]]
+name = "vault_confidence_test"
+path = "tests/vault_confidence_test.rs"

@@ -71,6 +71,7 @@ async fn passthrough(mut stream: TcpStream, host: &str, port: u16) -> Result<()>
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn mitm(
     mut client_stream: TcpStream,
     host: &str,

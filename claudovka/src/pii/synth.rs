@@ -24,20 +24,40 @@ impl SyntheticGenerator {
         original: &str,
         pii_type: &PiiType,
         locale: &Locale,
+        tier: u8,
+        confidence: f32,
     ) -> String {
+        tracing::trace!(
+            original_len = original.len(),
+            pii_type = pii_type.label(),
+            tier,
+            "synth: get_or_create enter"
+        );
         if let Some(existing) = vault.get_synthetic(original) {
+            tracing::trace!(original_len = original.len(), "synth: cache hit");
             return existing.to_string();
         }
+        tracing::trace!(original_len = original.len(), "synth: cache miss, generating");
         // Advance seed by current vault size so each new entity gets unique output.
         let call_offset = vault.mapping_count() as u64;
         let mut gen = SyntheticGenerator::new(vault.rng_seed.wrapping_add(call_offset));
         let synthetic = gen.generate(pii_type, original, locale);
-        vault.add_mapping(original.to_string(), synthetic.clone(), pii_type);
+        // original/synthetic only at DEBUG — logging raw PII at INFO would defeat the purpose
+        // of the proxy (PII would appear in every production log and log aggregator).
+        tracing::debug!(
+            original = %original,
+            synthetic = %synthetic,
+            pii_type = pii_type.label(),
+            tier,
+            "synthetic replacement applied"
+        );
+        vault.add_mapping(original.to_string(), synthetic.clone(), pii_type, tier, confidence);
         synthetic
     }
 
     /// Generate a synthetic replacement for the given PII type.
     pub fn generate(&mut self, pii_type: &PiiType, original: &str, locale: &Locale) -> String {
+        tracing::trace!(pii_type = pii_type.label(), "synth: dispatching generator");
         match pii_type {
             PiiType::Email => self.gen_email(locale),
             PiiType::Phone => self.gen_phone(original),
@@ -74,10 +94,9 @@ impl SyntheticGenerator {
 
     fn gen_phone(&mut self, original: &str) -> String {
         // Preserve country code prefix if present.
-        let prefix = if original.starts_with('+') {
-            let end = original.find(|c: char| c.is_ascii_digit()).unwrap_or(0);
-            let code_end = original[1..].find(|c: char| !c.is_ascii_digit()).map(|i| i + 1).unwrap_or(3);
-            format!("+{} ", &original[1..1 + code_end.min(3)])
+        let prefix = if let Some(after_plus) = original.strip_prefix('+') {
+            let code_end = after_plus.find(|c: char| !c.is_ascii_digit()).map(|i| i + 1).unwrap_or(3);
+            format!("+{} ", &after_plus[..code_end.min(3)])
         } else {
             String::new()
         };
@@ -112,9 +131,10 @@ impl SyntheticGenerator {
     }
 
     fn gen_ipv6(&mut self) -> String {
-        // fd00::/8 unique local.
-        let groups: Vec<String> = (0..7).map(|_| format!("{:04x}", self.rng.gen_range(0u16..=0xffff))).collect();
-        format!("fd{}::1", groups.join(":"))
+        // fd00::/8 unique local — 2 groups to keep max_synthetic_key_len small.
+        let g1 = format!("{:04x}", self.rng.gen_range(0u16..=0xffff));
+        let g2 = format!("{:04x}", self.rng.gen_range(0u16..=0xffff));
+        format!("fd{}:{}::1", g1, g2)
     }
 
     fn gen_api_key(&mut self, prefix: &str, original_len: usize) -> String {
@@ -295,8 +315,8 @@ mod tests {
     #[test]
     fn test_get_or_create_idempotent() {
         let mut vault = PiiVault::new("test-synth-1");
-        let s1 = SyntheticGenerator::get_or_create(&mut vault, "john@acme.com", &PiiType::Email, &Locale::EnUs);
-        let s2 = SyntheticGenerator::get_or_create(&mut vault, "john@acme.com", &PiiType::Email, &Locale::EnUs);
+        let s1 = SyntheticGenerator::get_or_create(&mut vault, "john@acme.com", &PiiType::Email, &Locale::EnUs, 1, 1.0);
+        let s2 = SyntheticGenerator::get_or_create(&mut vault, "john@acme.com", &PiiType::Email, &Locale::EnUs, 1, 1.0);
         assert_eq!(s1, s2, "same original should always return same synthetic");
     }
 
@@ -396,6 +416,45 @@ mod tests {
     }
 
     #[test]
+    fn test_gen_ipv6_length() {
+        // After the fix, gen_ipv6 produces "fd{4hex}:{4hex}::1" which is 14 chars.
+        // Verify several generations are all <= 16 chars, start with "fd", end with "::1".
+        for seed in 0..20u64 {
+            let mut gen = SyntheticGenerator::new(seed);
+            let result = gen.generate(&PiiType::IpV6, "2001:db8::1", &Locale::EnUs);
+            assert!(
+                result.len() <= 16,
+                "gen_ipv6 produced {} chars ({:?}) with seed {}, expected <= 16",
+                result.len(), result, seed
+            );
+            assert!(
+                result.starts_with("fd"),
+                "gen_ipv6 should start with 'fd', got {:?} with seed {}",
+                result, seed
+            );
+            assert!(
+                result.ends_with("::1"),
+                "gen_ipv6 should end with '::1', got {:?} with seed {}",
+                result, seed
+            );
+        }
+    }
+
+    #[test]
+    fn test_gen_ipv6_format_is_valid_ula() {
+        // Verify the format is "fdXXXX:XXXX::1" — valid ULA address.
+        let mut gen = SyntheticGenerator::new(42);
+        let result = gen.generate(&PiiType::IpV6, "::1", &Locale::EnUs);
+        // Should match pattern: fd followed by 4 hex chars, colon, 4 hex chars, ::1
+        let re = fancy_regex::Regex::new(r"^fd[0-9a-f]{4}:[0-9a-f]{4}::1$").unwrap();
+        assert!(
+            re.is_match(&result).unwrap_or(false),
+            "gen_ipv6 output {:?} does not match fdXXXX:XXXX::1 pattern",
+            result
+        );
+    }
+
+    #[test]
     fn test_get_or_create_same_original_different_types() {
         // The vault uses the original string as the key for idempotent lookup
         // (see get_synthetic / add_mapping). The second call with a different
@@ -407,12 +466,16 @@ mod tests {
             "test",
             &PiiType::Email,
             &Locale::EnUs,
+            1,
+            1.0,
         );
         let s_phone = SyntheticGenerator::get_or_create(
             &mut vault,
             "test",
             &PiiType::Phone,
             &Locale::EnUs,
+            1,
+            1.0,
         );
         // Because add_mapping is idempotent on the original key, the second
         // call returns the first synthetic (vault ignores the new type).

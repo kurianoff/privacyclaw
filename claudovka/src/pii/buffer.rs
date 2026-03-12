@@ -12,8 +12,10 @@ pub struct ReplacementBuffer {
     vault: VaultHandle,
     /// Internal buffer for text that might be mid-synthetic-token.
     buffer: String,
-    /// First characters of all synthetic keys — used to detect potential tokens.
-    trigger_chars: HashSet<char>,
+    /// First 2-byte prefixes of all synthetic keys — used to detect potential tokens.
+    trigger_prefixes: HashSet<[u8; 2]>,
+    /// Vault mapping count at the last trigger refresh — skip rebuild when unchanged.
+    cached_mapping_count: usize,
 }
 
 impl ReplacementBuffer {
@@ -21,16 +23,9 @@ impl ReplacementBuffer {
         Self {
             vault,
             buffer: String::new(),
-            trigger_chars: HashSet::new(),
+            trigger_prefixes: HashSet::new(),
+            cached_mapping_count: 0,
         }
-    }
-
-    /// Update the trigger chars from the current vault state.
-    ///
-    /// Call after the vault has been written to.
-    fn refresh_trigger_chars(&mut self) {
-        let vault = self.vault.read().unwrap();
-        self.trigger_chars = vault.synthetic_key_first_chars().collect();
     }
 
     /// Process an incoming text delta from an SSE event.
@@ -38,59 +33,110 @@ impl ReplacementBuffer {
     /// Returns the text to forward to the client (with synthetic→original
     /// replacements applied). May hold back a trailing window.
     pub fn process_delta(&mut self, incoming: &str) -> String {
+        tracing::trace!(
+            incoming_len = incoming.len(),
+            buffer_len = self.buffer.len(),
+            cached_count = self.cached_mapping_count,
+            "buffer: process_delta enter"
+        );
         if incoming.is_empty() {
             return String::new();
         }
-
-        // Refresh trigger chars (vault may have grown).
-        self.refresh_trigger_chars();
 
         self.buffer.push_str(incoming);
 
         let vault = self.vault.read().unwrap();
 
+        // Refresh trigger prefixes only when the vault has grown.
+        let current_count = vault.mapping_count();
+        if current_count != self.cached_mapping_count {
+            let old_count = self.cached_mapping_count;
+            self.trigger_prefixes = vault.synthetic_key_prefixes().collect();
+            self.cached_mapping_count = current_count;
+            tracing::trace!(
+                old_count,
+                new_count = current_count,
+                prefix_count = self.trigger_prefixes.len(),
+                "buffer: prefixes refreshed"
+            );
+        }
+
         // If vault is empty, flush everything immediately.
         if vault.is_empty() {
+            tracing::trace!(buffer_len = self.buffer.len(), "buffer: vault empty, immediate flush");
             return std::mem::take(&mut self.buffer);
         }
 
         let max_key_len = vault.max_synthetic_key_len;
 
         // Apply all replacements to the buffer first.
+        tracing::trace!(buffer_len = self.buffer.len(), max_key_len, "buffer: calling replace_synthetics");
         let (replaced, _any) = vault.replace_synthetics(&self.buffer);
         drop(vault);
 
         // Compute safe flush window: buffer minus trailing max_key_len bytes,
         // but only hold back if the tail contains a trigger char.
         let safe_len = if replaced.len() > max_key_len {
-            let tail = &replaced[replaced.len() - max_key_len..];
-            let has_trigger = tail.chars().any(|c| self.trigger_chars.contains(&c));
+            let tail_start = find_char_boundary(&replaced, replaced.len() - max_key_len);
+            // Use get() — never panics; falls back to whole string if boundary is off.
+            let tail = replaced.get(tail_start..).unwrap_or(&replaced);
+            let has_trigger = has_prefix_match(tail.as_bytes(), &self.trigger_prefixes);
+            tracing::trace!(safe_len = tail_start, replaced_len = replaced.len(), has_trigger, "buffer: holdback decision");
             if has_trigger {
-                replaced.len() - max_key_len
+                tail_start
             } else {
                 replaced.len()
             }
         } else {
             // Buffer is shorter than max_key_len — hold everything if trigger chars present.
-            let has_trigger = replaced.chars().any(|c| self.trigger_chars.contains(&c));
+            let has_trigger = has_prefix_match(replaced.as_bytes(), &self.trigger_prefixes);
+            tracing::trace!(safe_len = 0usize, replaced_len = replaced.len(), has_trigger, "buffer: holdback decision");
             if has_trigger { 0 } else { replaced.len() }
         };
 
         if safe_len == 0 {
             // Hold entire replaced buffer — keep it for next chunk.
             self.buffer = replaced;
+            tracing::debug!(
+                incoming_len = incoming.len(),
+                flushed_len = 0usize,
+                holdback_len = self.buffer.len(),
+                "buffer: delta processed"
+            );
             return String::new();
         }
 
-        // Split at a character boundary.
+        // Split at a character boundary using get() — never panics.
         let flush_to = find_char_boundary(&replaced, safe_len);
-        let flushed = replaced[..flush_to].to_string();
-        self.buffer = replaced[flush_to..].to_string();
-        flushed
+        match (replaced.get(..flush_to), replaced.get(flush_to..)) {
+            (Some(flushed), Some(remaining)) => {
+                let flushed = flushed.to_string();
+                self.buffer = remaining.to_string();
+                tracing::debug!(
+                    incoming_len = incoming.len(),
+                    flushed_len = flushed.len(),
+                    holdback_len = self.buffer.len(),
+                    "buffer: delta processed"
+                );
+                flushed
+            }
+            _ => {
+                // flush_to landed off a char boundary (shouldn't happen) — hold everything.
+                self.buffer = replaced;
+                tracing::debug!(
+                    incoming_len = incoming.len(),
+                    flushed_len = 0usize,
+                    holdback_len = self.buffer.len(),
+                    "buffer: delta processed"
+                );
+                String::new()
+            }
+        }
     }
 
     /// Flush all remaining buffered text at end of stream.
     pub fn flush_remaining(&mut self) -> String {
+        tracing::debug!(held_len = self.buffer.len(), "buffer: flush_remaining called");
         if self.buffer.is_empty() {
             return String::new();
         }
@@ -100,6 +146,20 @@ impl ReplacementBuffer {
         self.buffer.clear();
         replaced
     }
+}
+
+fn has_prefix_match(bytes: &[u8], prefixes: &HashSet<[u8; 2]>) -> bool {
+    for window in bytes.windows(2) {
+        if prefixes.contains(&[window[0], window[1]]) {
+            return true;
+        }
+    }
+    if let Some(&last) = bytes.last() {
+        if prefixes.iter().any(|p| p[0] == last) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Find the largest byte index ≤ `pos` that lies on a UTF-8 character boundary.
@@ -120,7 +180,7 @@ mod tests {
     fn make_vault_with(mappings: &[(&str, &str)]) -> VaultHandle {
         let mut vault = PiiVault::new("test");
         for (orig, syn) in mappings {
-            vault.add_mapping(orig.to_string(), syn.to_string(), &PiiType::PersonName);
+            vault.add_mapping(orig.to_string(), syn.to_string(), &PiiType::PersonName, 1, 0.9f32);
         }
         Arc::new(RwLock::new(vault))
     }
@@ -245,6 +305,138 @@ mod tests {
             !full.contains("SYN_X"),
             "synthetic still present in: {:?}",
             full
+        );
+    }
+
+    #[test]
+    fn test_multibyte_char_at_tail_boundary() {
+        // em dash '—' is 3 bytes; if max_key_len slices inside it we get a panic.
+        let vault = make_vault_with(&[("real_value", "SYN_X")]);
+        let mut buf = ReplacementBuffer::new(vault);
+        // Feed text where the tail window lands inside a multibyte char.
+        let out = buf.process_delta("— resume after restart\n   - \"continue\"");
+        let remaining = buf.flush_remaining();
+        let full = format!("{}{}", out, remaining);
+        // Just ensure no panic and the text round-trips intact.
+        assert!(full.contains('—'), "em dash should be preserved: {:?}", full);
+    }
+
+    /// Throughput: 1 MB of text with no PII should flush in under 5 ms (4.8).
+    #[test]
+    fn test_throughput_1mb_no_pii_under_5ms() {
+        use std::time::Instant;
+
+        // Empty vault — no trigger chars, so ReplacementBuffer is zero-copy.
+        let vault = make_vault_with(&[]);
+        let mut buf = ReplacementBuffer::new(vault);
+
+        // Build 1 MB of non-PII text.
+        let chunk = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. ";
+        let mut input = String::with_capacity(1024 * 1024);
+        while input.len() < 1024 * 1024 {
+            input.push_str(chunk);
+        }
+
+        let start = Instant::now();
+        let _out = buf.process_delta(&input);
+        let _remaining = buf.flush_remaining();
+        let elapsed = start.elapsed();
+
+        assert!(
+            elapsed.as_millis() < 5,
+            "1 MB no-PII flush took {}ms (limit 5ms)",
+            elapsed.as_millis()
+        );
+    }
+
+    #[test]
+    fn test_no_holdback_on_english_prose_with_ipv6_in_vault() {
+        // Vault has a real email mapping AND a false-positive IPv6 entry (from Rust path).
+        // English prose without any trigger prefixes should flush immediately.
+        let mut vault = PiiVault::new("test-prose-holdback");
+        vault.add_mapping(
+            "john@acme.com".to_string(),
+            "alice.smith@example.com".to_string(),
+            &PiiType::Email,
+            1,
+            0.9f32,
+        );
+        // Simulate a false-positive IPv6 that was detected from a Rust path like "::"
+        vault.add_mapping(
+            "::".to_string(),
+            "fd1a2b:3c4d::1".to_string(),
+            &PiiType::IpV6,
+            1,
+            0.9f32,
+        );
+        let handle = Arc::new(RwLock::new(vault));
+        let mut buf = ReplacementBuffer::new(handle);
+
+        // English prose chunks that do NOT contain any synthetic trigger prefixes.
+        // Trigger prefixes are "al" (from alice.smith@example.com) and "fd" (from fd1a2b:...).
+        let chunks = [
+            "The quick brown ",
+            "ox jumps over ",
+            "the very ",
+            "big w",
+            "ow.",
+        ];
+        let mut total_output = String::new();
+        for chunk in &chunks {
+            let out = buf.process_delta(chunk);
+            total_output.push_str(&out);
+        }
+        let remaining = buf.flush_remaining();
+        total_output.push_str(&remaining);
+
+        // All text should come through unmodified.
+        let expected = chunks.join("");
+        assert_eq!(total_output, expected, "English prose was modified or held back");
+        // flush_remaining should have returned empty (nothing held back after last chunk).
+        assert!(remaining.is_empty(), "flush_remaining returned non-empty: {:?}", remaining);
+    }
+
+    #[test]
+    fn test_holdback_triggered_by_prefix_match() {
+        // Verify that text containing a trigger prefix IS held back.
+        // Vault has synthetic "fd1a2b:3c4d::1" -> prefix [b'f', b'd'].
+        // Text ending with "fd" should be held back.
+        let mut vault = PiiVault::new("test-holdback-trigger");
+        vault.add_mapping(
+            "::".to_string(),
+            "fd1a2b:3c4d::1".to_string(),
+            &PiiType::IpV6,
+            1,
+            0.9f32,
+        );
+        let handle = Arc::new(RwLock::new(vault));
+        let mut buf = ReplacementBuffer::new(handle);
+
+        // Send text that ends with "fd" — the trigger prefix for the IPv6 synthetic.
+        let out = buf.process_delta("some text ending in fd");
+        // The buffer should hold back the tail because "fd" matches a trigger prefix.
+        // We can't assert exact holdback boundaries, but combined output must be correct.
+        let remaining = buf.flush_remaining();
+        let full = format!("{}{}", out, remaining);
+        assert_eq!(full, "some text ending in fd", "combined output should be original text");
+    }
+
+    #[test]
+    fn test_ipv6_synthetic_max_key_len_short() {
+        // After the gen_ipv6 fix, IPv6 synthetics are ~14 chars (fd{4}:{4}::1).
+        // Verify that a vault with only IPv6 mappings has max_synthetic_key_len <= 16.
+        use crate::pii::synth::SyntheticGenerator;
+        use crate::pii::locale::Locale;
+
+        let mut vault = PiiVault::new("test-ipv6-len");
+        for i in 0..10 {
+            let original = format!("2001:db8::{}", i);
+            SyntheticGenerator::get_or_create(&mut vault, &original, &PiiType::IpV6, &Locale::EnUs, 1, 1.0);
+        }
+        assert!(
+            vault.max_synthetic_key_len <= 16,
+            "max_synthetic_key_len is {} but should be <= 16 after gen_ipv6 fix",
+            vault.max_synthetic_key_len
         );
     }
 
