@@ -38,8 +38,30 @@ async fn mock_slm_server(content: &'static str) -> u16 {
         for _ in 0..4 {
             match listener.accept().await {
                 Ok((mut stream, _)) => {
-                    let mut buf = vec![0u8; 32768];
-                    let _ = stream.read(&mut buf).await;
+                    // Read until end of headers
+                    let mut raw = Vec::new();
+                    loop {
+                        let mut tmp = vec![0u8; 4096];
+                        let n = stream.read(&mut tmp).await.unwrap_or(0);
+                        if n == 0 { break; }
+                        raw.extend_from_slice(&tmp[..n]);
+                        if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                    }
+                    // Parse Content-Length and read body
+                    let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                    let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                    let content_length: usize = headers_str.lines()
+                        .find(|l| l.to_lowercase().starts_with("content-length:"))
+                        .and_then(|l| l.split(':').nth(1))
+                        .and_then(|v| v.trim().parse().ok())
+                        .unwrap_or(0);
+                    let mut body_bytes = raw[header_end + 4..].to_vec();
+                    while body_bytes.len() < content_length {
+                        let mut tmp = vec![0u8; 4096];
+                        let n = stream.read(&mut tmp).await.unwrap_or(0);
+                        if n == 0 { break; }
+                        body_bytes.extend_from_slice(&tmp[..n]);
+                    }
                     let _ = stream.write_all(response.as_bytes()).await;
                 }
                 Err(_) => break,

@@ -17,20 +17,23 @@ pub struct SidecarProcess {
     pub endpoint: String,
 }
 
-/// Poll `GET /health` on `127.0.0.1:<port>` up to 30 times at 100 ms intervals.
+/// Poll `GET /health` on `127.0.0.1:<port>` at 100 ms intervals.
 ///
 /// Returns `true` as soon as any HTTP response is received (status 200 or otherwise —
 /// any response means the TCP server is accepting connections).
-/// Returns `false` after 3 s without a successful response.
-fn probe_sidecar_ready(port: u16) -> bool {
+/// Returns `false` after `readiness_timeout_secs` without a successful response.
+fn probe_sidecar_ready(port: u16, readiness_timeout_secs: u64) -> bool {
     let addr: std::net::SocketAddr = ([127, 0, 0, 1], port).into();
     let request = "GET /health HTTP/1.0\r\nHost: 127.0.0.1\r\n\r\n";
-    for _ in 0..30 {
+    let iterations = (readiness_timeout_secs * 10).max(1);
+    for i in 0..iterations {
+        tracing::debug!(port = port, iteration = i, iterations, "probe_sidecar_ready: polling");
         std::thread::sleep(Duration::from_millis(100));
         if let Ok(mut stream) = TcpStream::connect_timeout(&addr, Duration::from_millis(200)) {
             let _ = stream.write_all(request.as_bytes());
             let mut resp = [0u8; 16];
             if stream.read(&mut resp).is_ok() {
+                tracing::warn!(port = port, elapsed_ms = i * 100, "sidecar ready");
                 return true;
             }
         }
@@ -41,10 +44,11 @@ fn probe_sidecar_ready(port: u16) -> bool {
 impl SidecarProcess {
     /// Start llama-server as a subprocess.
     ///
-    /// `llama_server_path` — path to the `llama-server` binary.
-    /// `model_path`        — path to the GGUF model file.
-    /// `port`              — port for the HTTP server (default: 8081).
-    pub fn start(llama_server_path: &Path, model_path: &Path, port: u16) -> Result<Self> {
+    /// `llama_server_path`      — path to the `llama-server` binary.
+    /// `model_path`             — path to the GGUF model file.
+    /// `port`                   — port for the HTTP server (default: 8081).
+    /// `readiness_timeout_secs` — seconds to poll for readiness (10 polls/s at 100ms intervals).
+    pub fn start(llama_server_path: &Path, model_path: &Path, port: u16, readiness_timeout_secs: u64) -> Result<Self> {
         let child = Command::new(llama_server_path)
             .arg("--model")
             .arg(model_path)
@@ -58,6 +62,7 @@ impl SidecarProcess {
 
         let pid = child.id();
         let endpoint = format!("http://127.0.0.1:{}", port);
+        let start_time = std::time::Instant::now();
 
         tracing::warn!(
             pid = pid,
@@ -66,8 +71,11 @@ impl SidecarProcess {
             "Tier3: llama-server started"
         );
 
-        if !probe_sidecar_ready(port) {
-            tracing::warn!(pid = pid, port = port, "Tier3: sidecar not ready within 3s, continuing anyway");
+        if probe_sidecar_ready(port, readiness_timeout_secs) {
+            let elapsed_ms = start_time.elapsed().as_millis() as u64;
+            tracing::warn!(pid = pid, port = port, elapsed_ms, "Tier3: sidecar ready");
+        } else {
+            tracing::warn!(pid = pid, port = port, elapsed_ms = readiness_timeout_secs * 1000, "Tier3: sidecar not ready within timeout, continuing anyway");
         }
 
         Ok(Self {
@@ -215,6 +223,7 @@ impl SlmSidecar {
         &self,
         text: &str,
     ) -> Option<(String, Vec<(String, String)>)> {
+        tracing::debug!(text_len = text.len(), "detect_and_rewrite: enter");
         let max_tokens = ((text.len() as u32 / 4) + 128).clamp(512, 4096);
 
         let req_body = ChatCompletionRequest {
@@ -271,9 +280,11 @@ impl SlmSidecar {
             .map(|c| c.message.content.clone())
             .unwrap_or_default();
 
+        tracing::debug!(rewritten_len = rewritten.len(), "detect_and_rewrite: SLM response received");
+
         if !rewritten.contains('§') {
-            tracing::debug!("Tier3 standalone: SLM produced no § markers — no PII detected");
-            return Some((text.to_string(), vec![]));
+            tracing::warn!(text_len = text.len(), "Tier3: SLM produced no § markers");
+            return None;
         }
 
         let pairs = extract_token_pairs(text, &rewritten);
@@ -331,6 +342,7 @@ or markdown.";
 /// The returned pair key includes the `§` delimiters (vault key = `"§Peter§"`),
 /// and the value is the original substring.
 pub fn extract_token_pairs(original: &str, rewritten: &str) -> Vec<(String, String)> {
+    tracing::debug!(original_len = original.len(), rewritten_len = rewritten.len(), "extract_token_pairs: enter");
     if !rewritten.contains('§') {
         return vec![];
     }
@@ -374,6 +386,7 @@ pub fn extract_token_pairs(original: &str, rewritten: &str) -> Vec<(String, Stri
                     let orig_end = orig_start + inner.len();
                     let original_span = original[orig_start..orig_end].to_string();
                     let token = format!("§{}§", inner);
+                    tracing::debug!(pair_index = pairs.len(), span_len = original_span.len(), "extract_token_pairs: aligned pair found");
                     pairs.push((original_span, token));
                     i_orig = orig_end;
                 }
@@ -525,8 +538,28 @@ mod tests {
 
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await;
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
                 let _ = stream.write_all(mock_response.as_bytes()).await;
             }
         });
@@ -561,8 +594,28 @@ mod tests {
         let http_500 = "HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n";
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await;
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
                 let _ = stream.write_all(http_500.as_bytes()).await;
             }
         });
@@ -650,6 +703,7 @@ mod tests {
             Path::new("/nonexistent/llama-server"),
             Path::new("/tmp/model.gguf"),
             16442,
+            30u64,
         );
         assert!(result.is_err(), "starting sidecar with missing binary must fail");
     }
@@ -664,6 +718,7 @@ mod tests {
             Path::new("/bin/sh"),
             Path::new("/tmp/model.gguf"),
             16442,
+            30u64,
         );
         // /bin/sh always spawns successfully even with wrong args.
         if let Ok(sp) = result {
@@ -807,9 +862,29 @@ mod tests {
 
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 32768];
-                let n = stream.read(&mut buf).await.unwrap_or(0);
-                let _ = tx.send(buf[..n].to_vec());
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
+                let _ = tx.send(raw);
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
@@ -864,8 +939,28 @@ mod tests {
 
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await;
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
@@ -902,8 +997,28 @@ mod tests {
 
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await;
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
                 let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n").await;
             }
         });
@@ -935,8 +1050,28 @@ mod tests {
 
         tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut buf = vec![0u8; 4096];
-                let _ = stream.read(&mut buf).await;
+                let mut raw = Vec::new();
+                loop {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    raw.extend_from_slice(&tmp[..n]);
+                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
+                }
+                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
+                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
+                let content_length: usize = headers_str.lines()
+                    .find(|l| l.to_lowercase().starts_with("content-length:"))
+                    .and_then(|l| l.split(':').nth(1))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                let mut body_bytes = raw[header_end + 4..].to_vec();
+                while body_bytes.len() < content_length {
+                    let mut tmp = vec![0u8; 4096];
+                    let n = stream.read(&mut tmp).await.unwrap_or(0);
+                    if n == 0 { break; }
+                    body_bytes.extend_from_slice(&tmp[..n]);
+                }
                 let _ = stream.write_all(response.as_bytes()).await;
             }
         });
@@ -946,17 +1081,9 @@ mod tests {
         let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{}", port), 2000);
         let result = sidecar.detect_and_rewrite("just plain text no pii").await;
 
-        // Implementation returns Some((original_text, [])) when no § found.
-        match result {
-            Some((_rewritten, pairs)) => {
-                assert!(pairs.is_empty(),
-                    "no § markers → pairs must be empty, got: {:?}", pairs);
-            }
-            None => {
-                // Also acceptable if implementation returns None for no-PII case.
-                // (The current impl returns Some((text, [])) but we tolerate None too.)
-            }
-        }
+        // After Fix 6, the implementation returns None when no § markers found.
+        assert!(result.is_none(),
+            "no § markers → detect_and_rewrite must return None, got: {:?}", result);
     }
 
     /// --n-predict flag is absent from the SidecarProcess spawn command.
@@ -977,6 +1104,7 @@ mod tests {
             Path::new("/nonexistent-llama-server-for-arg-test"),
             Path::new("/tmp/model.gguf"),
             16443,
+            30u64,
         );
         // The spawn must fail (binary doesn't exist).
         assert!(result.is_err(), "nonexistent binary must fail");

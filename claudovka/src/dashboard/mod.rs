@@ -522,7 +522,7 @@ async fn handle_http(
                 *guard = None;
             }
             // Start new sidecar. Log errors but continue — config is still updated.
-            match crate::pii::tier3::SidecarProcess::start(&llama_server_bin, &model_file, 16442) {
+            match crate::pii::tier3::SidecarProcess::start(&llama_server_bin, &model_file, 16442, 30u64) {
                 Ok(sp) => {
                     if let Ok(mut guard) = sidecar.lock() {
                         *guard = Some(sp);

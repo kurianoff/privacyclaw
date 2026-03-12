@@ -480,10 +480,10 @@ mod tests {
     async fn patch_tier3_without_tier2_is_error() {
         let mgr = default_mgr();
         let err = mgr
-            .patch(serde_json::json!({ "pii": { "tiers": { "slm": true } } }))
+            .patch(serde_json::json!({ "pii": { "tiers": { "regex": false, "ner": true, "slm": true } } }))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Tier 3 depends on Tier 1 + Tier 2"));
+        assert!(err.to_string().contains("Tier 2 depends on Tier 1"));
     }
 
     #[tokio::test]

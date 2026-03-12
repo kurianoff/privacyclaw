@@ -1038,10 +1038,28 @@ async fn stress_tier3_standalone_concurrency() {
 
                 // In T3 standalone the body going upstream has §email§ tokens, not the plain email.
                 // The original bare email must not appear.
+                // The forwarded body must contain the §-wrapped form
                 assert!(
-                    !masked.contains(&email_c)
-                        || masked.contains(&format!("\u{00a7}{}\u{00a7}", email_c)),
-                    "S8 session {session_id}: original email exposed in forwarded request: {masked:?}"
+                    masked.contains(&format!("\u{00a7}{}\u{00a7}", email_c)),
+                    "S8 session {session_id}: forwarded body missing §-wrapped email: {masked:?}"
+                );
+                // The bare unwrapped email must NOT appear outside §...§ markers.
+                // Strip all §token§ substrings and check the remainder is free of the bare email.
+                let stripped = {
+                    let mut s = masked.clone();
+                    while let Some(start) = s.find('\u{00a7}') {
+                        if let Some(end_rel) = s[start + 2..].find('\u{00a7}') {
+                            let end = start + 2 + end_rel + 2;
+                            s.replace_range(start..end, "");
+                        } else {
+                            break;
+                        }
+                    }
+                    s
+                };
+                assert!(
+                    !stripped.contains(email_c.as_str()),
+                    "S8 session {session_id}: bare email leaked outside §§ markers in forwarded body: {masked:?}"
                 );
                 assert!(
                     masked.contains(&wrapped_c),
