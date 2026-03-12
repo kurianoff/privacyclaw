@@ -76,23 +76,7 @@ impl ReplacementBuffer {
 
         // Compute safe flush window: buffer minus trailing max_key_len bytes,
         // but only hold back if the tail contains a trigger char.
-        let safe_len = if replaced.len() > max_key_len {
-            let tail_start = find_char_boundary(&replaced, replaced.len() - max_key_len);
-            // Use get() — never panics; falls back to whole string if boundary is off.
-            let tail = replaced.get(tail_start..).unwrap_or(&replaced);
-            let has_trigger = has_prefix_match(tail.as_bytes(), &self.trigger_prefixes);
-            tracing::trace!(safe_len = tail_start, replaced_len = replaced.len(), has_trigger, "buffer: holdback decision");
-            if has_trigger {
-                tail_start
-            } else {
-                replaced.len()
-            }
-        } else {
-            // Buffer is shorter than max_key_len — hold everything if trigger chars present.
-            let has_trigger = has_prefix_match(replaced.as_bytes(), &self.trigger_prefixes);
-            tracing::trace!(safe_len = 0usize, replaced_len = replaced.len(), has_trigger, "buffer: holdback decision");
-            if has_trigger { 0 } else { replaced.len() }
-        };
+        let safe_len = compute_safe_flush_len(&replaced, max_key_len, &self.trigger_prefixes);
 
         if safe_len == 0 {
             // Hold entire replaced buffer — keep it for next chunk.
@@ -145,6 +129,27 @@ impl ReplacementBuffer {
         drop(vault);
         self.buffer.clear();
         replaced
+    }
+}
+
+/// Compute how many bytes from the front of `text` are safe to flush.
+///
+/// Holds back a trailing window of `max_key_len` bytes (adjusted to a char
+/// boundary) whenever that window contains a synthetic-token trigger prefix.
+/// Returns `text.len()` when nothing needs to be held back, or `0` when the
+/// entire buffer is shorter than `max_key_len` and contains a trigger.
+fn compute_safe_flush_len(text: &str, max_key_len: usize, prefixes: &HashSet<[u8; 2]>) -> usize {
+    if text.len() > max_key_len {
+        let tail_start = find_char_boundary(text, text.len() - max_key_len);
+        let tail = text.get(tail_start..).unwrap_or(text);
+        let has_trigger = has_prefix_match(tail.as_bytes(), prefixes);
+        tracing::trace!(safe_len = tail_start, replaced_len = text.len(), has_trigger, "buffer: holdback decision");
+        if has_trigger { tail_start } else { text.len() }
+    } else {
+        // Buffer is shorter than max_key_len — hold everything if trigger present.
+        let has_trigger = has_prefix_match(text.as_bytes(), prefixes);
+        tracing::trace!(safe_len = 0usize, replaced_len = text.len(), has_trigger, "buffer: holdback decision");
+        if has_trigger { 0 } else { text.len() }
     }
 }
 

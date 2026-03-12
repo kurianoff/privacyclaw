@@ -168,6 +168,7 @@ impl PiiPipeline {
         locale: &Locale,
     ) -> Option<(Vec<u8>, Vec<PiiDetection>)> {
         if self.slm_standalone {
+            tracing::debug!(body_len = body.len(), provider = provider.as_str(), "process_request_body_async: T3 standalone fast-path activated");
             return self.process_body_t3_standalone(body, vault_handle, provider).await;
         }
 
@@ -460,6 +461,7 @@ impl PiiPipeline {
         vault_handle: &VaultHandle,
         provider: Provider,
     ) -> Option<(Vec<u8>, Vec<PiiDetection>)> {
+        tracing::info!(body_len = body.len(), provider = provider.as_str(), "pii t3-standalone: processing request body");
         let slm = self.slm.as_ref()?;
 
         let text_str = match std::str::from_utf8(body) {
@@ -492,7 +494,12 @@ impl PiiPipeline {
         type RewriteResult = Option<(String, Vec<(String, String)>)>;
         let mut rewrite_results: Vec<RewriteResult> = Vec::with_capacity(entries.len());
         for entry in &entries {
-            rewrite_results.push(slm.detect_and_rewrite(&entry.text).await);
+            tracing::debug!(msg_idx = entry.msg_idx, text_len = entry.text.len(), "pii t3-standalone: sending message text to SLM");
+            let result = slm.detect_and_rewrite(&entry.text).await;
+            if result.is_none() {
+                tracing::debug!(msg_idx = entry.msg_idx, text_len = entry.text.len(), "pii t3-standalone: SLM returned None for message text");
+            }
+            rewrite_results.push(result);
         }
 
         // Apply results: populate vault and rewrite JSON value (vault lock held briefly).
@@ -573,6 +580,8 @@ impl PiiPipeline {
             return None;
         }
 
+        tracing::info!(replacement_count = all_detections.len(), provider = provider.as_str(), "pii t3-standalone: request body processing complete");
+
         match serde_json::to_vec(&value) {
             Ok(bytes) => Some((bytes, all_detections)),
             Err(e) => {
@@ -591,6 +600,7 @@ impl PiiPipeline {
 ///
 /// Returns `true` if the body was modified.
 pub fn inject_system_instruction(value: &mut serde_json::Value, provider: &Provider) -> bool {
+    tracing::debug!(provider = provider.as_str(), "inject_system_instruction: enter");
     let block = format!("\n\n<system-reminder>\n{}\n</system-reminder>", SYSTEM_REMINDER);
     match provider {
         Provider::Anthropic => {
@@ -600,12 +610,14 @@ pub fn inject_system_instruction(value: &mut serde_json::Value, provider: &Provi
                         "<system-reminder>\n{}\n</system-reminder>",
                         SYSTEM_REMINDER
                     ));
+                    tracing::debug!(provider = provider.as_str(), branch = "anthropic-create", "inject_system_instruction: injected new system field");
                     true
                 }
                 Some(serde_json::Value::String(_)) => {
                     // as_str().to_string() releases the shared borrow before mutation.
                     let existing = value["system"].as_str().unwrap_or("").to_string();
                     value["system"] = serde_json::Value::String(format!("{}{}", existing, block));
+                    tracing::debug!(provider = provider.as_str(), branch = "anthropic-append", "inject_system_instruction: appended to existing system field");
                     true
                 }
                 _ => {
@@ -630,8 +642,10 @@ pub fn inject_system_instruction(value: &mut serde_json::Value, provider: &Provi
                 Some(idx) => {
                     if let Some(content) = messages[idx].get("content").and_then(|c| c.as_str()).map(|s| s.to_string()) {
                         messages[idx]["content"] = serde_json::Value::String(format!("{}{}", content, block));
+                        tracing::debug!(provider = provider.as_str(), branch = "openai-append", "inject_system_instruction: appended to existing system message");
                         true
                     } else {
+                        tracing::debug!(provider = provider.as_str(), branch = "openai-no-string-content", "inject_system_instruction: system message has non-string content, skipped");
                         false
                     }
                 }
@@ -643,15 +657,19 @@ pub fn inject_system_instruction(value: &mut serde_json::Value, provider: &Provi
                             "content": format!("<system-reminder>\n{}\n</system-reminder>", SYSTEM_REMINDER)
                         }),
                     );
+                    tracing::debug!(provider = provider.as_str(), branch = "openai-insert", "inject_system_instruction: inserted new system message at index 0");
                     true
                 }
             }
         }
         Provider::Google => {
-            tracing::debug!("pii: skipping system instruction injection for Google provider");
+            tracing::debug!(provider = provider.as_str(), "inject_system_instruction: skipping for Google provider");
             false
         }
-        _ => false,
+        _ => {
+            tracing::debug!(provider = provider.as_str(), "inject_system_instruction: unknown provider, skipping");
+            false
+        }
     }
 }
 

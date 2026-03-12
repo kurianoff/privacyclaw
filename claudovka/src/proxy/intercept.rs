@@ -359,8 +359,17 @@ async fn handle_c2u_pii(
             .map(|p| p.pipeline.slm_standalone && p.mode == PiiMode::Replace)
             .unwrap_or(false);
         let forward_body = if t3_standalone_replace {
-            inject_system_instruction_into_body(&working_body, provider)
-                .unwrap_or(working_body)
+            tracing::debug!(provider = provider.as_str(), "c2u_pii: attempting system instruction injection (T3 standalone)");
+            match inject_system_instruction_into_body(&working_body, provider) {
+                Some(injected) => {
+                    tracing::debug!(provider = provider.as_str(), "c2u_pii: system instruction injection succeeded");
+                    injected
+                }
+                None => {
+                    tracing::debug!(provider = provider.as_str(), "c2u_pii: system instruction injection skipped (no modification made)");
+                    working_body
+                }
+            }
         } else {
             working_body
         };
@@ -1524,11 +1533,15 @@ fn find_chunked_body_end(body: &[u8]) -> Option<usize> {
 /// Parse `body` as JSON, inject `SYSTEM_REMINDER` via `pii::inject_system_instruction`,
 /// and return the re-serialized bytes. Returns `None` if parsing or injection fails.
 fn inject_system_instruction_into_body(body: &[u8], provider: Provider) -> Option<Vec<u8>> {
+    tracing::debug!(body_len = body.len(), provider = provider.as_str(), "inject_system_instruction_into_body: enter");
     let text = std::str::from_utf8(body).ok()?;
     let mut value: serde_json::Value = serde_json::from_str(text).ok()?;
     if pii::inject_system_instruction(&mut value, &provider) {
-        serde_json::to_vec(&value).ok()
+        let result = serde_json::to_vec(&value).ok();
+        tracing::debug!(injected = result.is_some(), provider = provider.as_str(), "inject_system_instruction_into_body: result");
+        result
     } else {
+        tracing::debug!(provider = provider.as_str(), "inject_system_instruction_into_body: injection returned false, no modification");
         None
     }
 }

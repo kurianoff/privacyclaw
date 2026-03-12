@@ -226,16 +226,7 @@ impl Config {
         let mut cfg: Config = toml::from_str(&content)
             .with_context(|| format!("Failed to parse config file: {:?}", config_path))?;
 
-        if cfg.pii.mode == "replace" && cfg.pii.tiers.ner {
-            let model_path = std::path::Path::new(&cfg.pii.ner.model_path);
-            if !model_path.exists() {
-                tracing::warn!(
-                    model_path = %cfg.pii.ner.model_path,
-                    "pii.tiers.ner = true but model not found; disabling Tier 2 (NER)"
-                );
-                cfg.pii.tiers.ner = false;
-            }
-        }
+        disable_ner_if_model_missing(&mut cfg);
 
         Ok(cfg)
     }
@@ -391,16 +382,37 @@ fn json_deep_merge(base: &mut serde_json::Value, patch: &serde_json::Value) -> V
     changed
 }
 
+/// Disable Tier 2 (NER) at startup when the model file is absent.
+///
+/// This prevents a confusing runtime failure when the user sets `tiers.ner = true`
+/// in replace mode but has not yet downloaded the model. The warning logged here
+/// is the only indication that NER was silently disabled.
+fn disable_ner_if_model_missing(cfg: &mut Config) {
+    if cfg.pii.mode == "replace" && cfg.pii.tiers.ner {
+        let model_path = std::path::Path::new(&cfg.pii.ner.model_path);
+        if !model_path.exists() {
+            tracing::warn!(
+                model_path = %cfg.pii.ner.model_path,
+                "pii.tiers.ner = true but model not found; disabling Tier 2 (NER)"
+            );
+            cfg.pii.tiers.ner = false;
+        }
+    }
+}
+
 /// Enforce PII tier dependency rules.
+///
+/// Allowed combinations:
+///   - Any subset where each tier's dependencies are satisfied.
+///   - T3 standalone: `{regex:false, ner:false, slm:true}` — SLM runs without T1/T2.
 fn validate_pii_tiers(tiers: &PiiTiersConfig) -> anyhow::Result<()> {
+    // Tier 2 (NER) always requires Tier 1 (regex), even in standalone paths.
     if tiers.ner && !tiers.regex {
         anyhow::bail!("pii.tiers.ner requires pii.tiers.regex = true (Tier 2 depends on Tier 1)");
     }
-    // T3 standalone: {regex:false, ner:false, slm:true} is explicitly allowed.
-    if is_t3_standalone(tiers) {
-        return Ok(());
-    }
-    if tiers.slm && (!tiers.regex || !tiers.ner) {
+    // Tier 3 (SLM) requires both T1 and T2 when not in standalone mode.
+    // Standalone ({regex:false, ner:false, slm:true}) is explicitly allowed.
+    if tiers.slm && !is_t3_standalone(tiers) && (!tiers.regex || !tiers.ner) {
         anyhow::bail!(
             "pii.tiers.slm requires pii.tiers.regex = true and pii.tiers.ner = true (Tier 3 depends on Tier 1 + Tier 2)"
         );

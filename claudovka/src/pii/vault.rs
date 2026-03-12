@@ -116,13 +116,13 @@ pub struct PiiVault {
     /// None when the vault is empty.
     reverse_automaton: Option<AhoCorasick>,
     /// Length of the longest synthetic key (used for buffering window).
-    pub max_synthetic_key_len: usize,
+    pub(crate) max_synthetic_key_len: usize,
     /// Seeded RNG state (we store the seed; callers advance it by passing &mut SmallRng).
-    pub rng_seed: u64,
+    pub(crate) rng_seed: u64,
     #[allow(dead_code)]
-    pub conversation_id: String,
+    conversation_id: String,
     #[allow(dead_code)]
-    pub created_at: DateTime<Utc>,
+    created_at: DateTime<Utc>,
 }
 
 impl PiiVault {
@@ -378,7 +378,7 @@ impl VaultRegistry {
     }
 
     /// Get existing vault or create a new empty one.
-    #[allow(dead_code)]
+    #[allow(dead_code)] // called from #[cfg(test)] only
     pub fn get_or_create(&self, conv_id: &str) -> VaultHandle {
         let mut map = self.vaults.lock().unwrap();
         if let Some(entry) = map.get_mut(conv_id) {
@@ -404,8 +404,21 @@ impl VaultRegistry {
             }
         }
 
-        // Cache miss — try to load from storage.
-        let vault = match store.load_vault(conv_id) {
+        // Cache miss — load from storage or create fresh.
+        let vault = Self::load_or_create(conv_id, store);
+
+        let handle = Arc::new(RwLock::new(vault));
+        let mut map = self.vaults.lock().unwrap();
+        map.insert(conv_id.to_string(), VaultEntry {
+            handle: Arc::clone(&handle),
+            last_accessed: Instant::now(),
+        });
+        handle
+    }
+
+    /// Load a vault from storage, or create a fresh empty one on miss or error.
+    fn load_or_create(conv_id: &str, store: &Store) -> PiiVault {
+        match store.load_vault(conv_id) {
             Ok(Some((seed, records))) => {
                 tracing::info!(conv_id = %conv_id, mappings = records.len(), "vault: restored from storage");
                 let vault_records: Vec<VaultRecord> = records
@@ -428,15 +441,7 @@ impl VaultRegistry {
                 tracing::warn!(conv_id = %conv_id, err = %e, "vault: load_vault failed, creating fresh");
                 PiiVault::new(conv_id)
             }
-        };
-
-        let handle = Arc::new(RwLock::new(vault));
-        let mut map = self.vaults.lock().unwrap();
-        map.insert(conv_id.to_string(), VaultEntry {
-            handle: Arc::clone(&handle),
-            last_accessed: Instant::now(),
-        });
-        handle
+        }
     }
 
     /// Remove vaults that have not been accessed within the TTL.
