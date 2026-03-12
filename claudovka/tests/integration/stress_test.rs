@@ -62,10 +62,12 @@ fn make_pii_ctx_tier1() -> Arc<PiiContext> {
 
 /// Build a PiiContext with Tier 1 + Tier 3 (mock SLM at given port).
 /// confidence_threshold set to 0.0 so all T1 spans are offered to the SLM.
+/// Named "T1+T3 (no ort-ner)" because the ort-ner feature is not compiled in;
+/// tiers.ner is intentionally false here.
 fn make_pii_ctx_tier1_tier3(slm_port: u16) -> Arc<PiiContext> {
     let mut cfg = claudovka::config::PiiConfig::default();
     cfg.tiers.slm = true;
-    cfg.tiers.ner = true; // T3 requires T1+T2 unless standalone
+    cfg.tiers.ner = false; // ort-ner feature not compiled; this is T1+T3 (no ort-ner)
     cfg.slm.endpoint = format!("http://127.0.0.1:{}", slm_port);
     cfg.slm.timeout_ms = 5000;
     cfg.slm.confidence_threshold = 0.0; // send all T1 spans to SLM
@@ -259,16 +261,41 @@ async fn start_mock_slm_server(mode: SlmMockMode, max_connections: usize) -> u16
 async fn handle_slm_connection(mut stream: tokio::net::TcpStream, mode: SlmMockMode) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-    let mut buf = vec![0u8; 65536];
-    let n = stream.read(&mut buf).await.unwrap_or(0);
-    let raw = &buf[..n];
+    // Read until we have the full HTTP headers (\r\n\r\n), then read exactly
+    // Content-Length bytes for the body. A single read() can miss data when
+    // the body arrives in subsequent TCP segments.
+    let mut raw: Vec<u8> = Vec::with_capacity(65536);
+    let mut tmp = vec![0u8; 4096];
+    let header_end = loop {
+        let n = stream.read(&mut tmp).await.unwrap_or(0);
+        if n == 0 {
+            break raw.len();
+        }
+        raw.extend_from_slice(&tmp[..n]);
+        if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+    };
 
-    let body_start = raw
-        .windows(4)
-        .position(|w| w == b"\r\n\r\n")
-        .map(|p| p + 4)
-        .unwrap_or(n);
-    let body = &raw[body_start..];
+    // Parse Content-Length so we know how many body bytes to expect.
+    let header_str = String::from_utf8_lossy(&raw[..header_end]);
+    let content_length: usize = header_str
+        .lines()
+        .find(|l| l.to_ascii_lowercase().starts_with("content-length:"))
+        .and_then(|l| l.split(':').nth(1))
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0);
+
+    // Read remaining body bytes if the first reads didn't capture them all.
+    while raw.len() < header_end + content_length {
+        let n = stream.read(&mut tmp).await.unwrap_or(0);
+        if n == 0 {
+            break;
+        }
+        raw.extend_from_slice(&tmp[..n]);
+    }
+
+    let body = &raw[header_end..];
     let req_json: serde_json::Value = serde_json::from_slice(body).unwrap_or_default();
 
     let content = match mode {
@@ -1055,8 +1082,13 @@ async fn stress_tier3_standalone_concurrency() {
     tokio::time::timeout(T3_TIMEOUT, async {
         while let Some(res) = join_set.join_next().await {
             let (sid, decoded, email, _wrapped) = res.expect("S8 session panicked");
+            // Verify the original email string is present in the restored output.
             assert!(decoded.contains(&email),
                 "S8 session {sid}: original email not restored in response: {decoded:?}");
+            // Verify the synthetic §...§ token is gone — without this check the assertion
+            // above is a tautology because §email§ contains email as a substring.
+            assert!(!decoded.contains('\u{00a7}'),
+                "S8 session {sid}: synthetic § token still present after reversal: {decoded:?}");
             completed += 1;
         }
     })
