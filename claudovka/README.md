@@ -7,7 +7,7 @@ Local MITM privacy proxy for LLM API traffic. Intercepts, logs, and displays con
 - Transparently intercepts HTTPS traffic to Anthropic, OpenAI, Google, Mistral, Groq
 - Parses streaming SSE responses in real time
 - Stores conversations locally in SQLite
-- Shows a live web dashboard at `http://localhost:8443`
+- Shows a live web dashboard at `http://localhost:16443`
 
 All data stays on your machine.
 
@@ -18,7 +18,7 @@ All data stays on your machine.
 Configure a single app to use claudovka as an HTTP proxy:
 
 ```sh
-export HTTPS_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:16440
 ```
 
 Works with any app that respects the standard proxy environment variable.
@@ -57,10 +57,10 @@ The CA lives at `~/Library/Application Support/claudovka/ca/ca.pem` (macOS) or `
 
 ```sh
 claudovka start
-export HTTPS_PROXY=http://127.0.0.1:8080
+export HTTPS_PROXY=http://127.0.0.1:16440
 ```
 
-Point any LLM SDK or CLI at the proxy. Open `http://localhost:8443` to watch conversations live.
+Point any LLM SDK or CLI at the proxy. Open `http://localhost:16443` to watch conversations live.
 
 ### 2b. Network mode (macOS)
 
@@ -82,9 +82,9 @@ sudo tee -a /etc/hosts <<'EOF'
 127.0.0.1  api.groq.com
 EOF
 
-# Create pf redirect: port 443 → 4443
+# Create pf redirect: port 443 → 16441
 sudo tee /etc/pf.anchors/claudovka <<'EOF'
-rdr pass on lo0 proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 4443
+rdr pass on lo0 proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 16441
 EOF
 
 # Add anchor to pf.conf — rdr-anchor must go in the translation section,
@@ -119,14 +119,14 @@ EOF
 
 # pf anchor: add IPv6 redirect alongside IPv4
 sudo tee /etc/pf.anchors/claudovka <<'EOF'
-rdr pass on lo0 inet  proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 4443
-rdr pass on lo0 inet6 proto tcp from any to ::1       port 443 -> ::1       port 4443
+rdr pass on lo0 inet  proto tcp from any to 127.0.0.1 port 443 -> 127.0.0.1 port 16441
+rdr pass on lo0 inet6 proto tcp from any to ::1       port 443 -> ::1       port 16441
 EOF
 
 sudo pfctl -ef /etc/pf.conf
 ```
 
-Then configure claudovka to listen on all interfaces (IPv4 + IPv6) by setting `listen = "[::]:4443"` in `config.toml` under `[network_proxy]`.
+Then configure claudovka to listen on all interfaces (IPv4 + IPv6) by setting `listen = "[::]:16441"` in `config.toml` under `[network_proxy]`.
 
 Then start the proxy:
 
@@ -134,15 +134,15 @@ Then start the proxy:
 claudovka network-start
 ```
 
-Open `http://localhost:8443` for the live dashboard.
+Open `http://localhost:16443` for the live dashboard.
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `claudovka init [--install-ca]` | Generate CA; optionally install into OS trust store |
-| `claudovka start` | Start CONNECT proxy (`:8080`) + dashboard (`:8443`) |
-| `claudovka network-start` | Start network proxy (`:4443`) + dashboard (`:8443`) |
+| `claudovka start` | Start CONNECT proxy (`:16440`) + dashboard (`:16443`) |
+| `claudovka network-start` | Start network proxy (`:16441`) + dashboard (`:16443`) |
 | `claudovka setup-network` | Print `/etc/hosts` + pf rules for network mode |
 | `claudovka ca-path` | Print path to CA certificate |
 | `claudovka reset-ca` | Delete CA and generate a new one |
@@ -158,8 +158,8 @@ claudovka --config config.toml start
 
 ```toml
 [proxy]
-listen = "127.0.0.1:8080"      # CONNECT proxy address
-dashboard = "127.0.0.1:8443"   # Dashboard address
+listen = "127.0.0.1:16440"     # CONNECT proxy address
+dashboard = "127.0.0.1:16443"  # Dashboard address
 
 [intercept]
 # Domains to MITM; all other HTTPS is passed through unchanged
@@ -172,7 +172,7 @@ domains = [
 ]
 
 [network_proxy]
-listen = "127.0.0.1:4443"
+listen = "127.0.0.1:16441"
 enabled = false                 # Set true to auto-start with `claudovka start`
 
 [storage]
@@ -205,7 +205,7 @@ sudo security remove-trusted-cert -d "$HOME/Library/Application Support/claudovk
 
 **CONNECT mode**: Acts as an HTTP proxy. When a client sends `CONNECT api.anthropic.com:443`, claudovka generates a leaf certificate signed by its local CA, performs TLS termination, then opens a real TLS connection upstream and proxies the decrypted traffic. Intercepted domains get MITM'd; everything else is tunneled through unchanged.
 
-**Network mode**: Uses DNS override (`/etc/hosts`) to redirect LLM API hostnames to `127.0.0.1`, and a `pf` redirect rule to forward port 443 → 4443. claudovka listens on `:4443`, reads the TLS SNI from the ClientHello to determine the target domain, then performs the same MITM logic.
+**Network mode**: Uses DNS override (`/etc/hosts`) to redirect LLM API hostnames to `127.0.0.1`, and a `pf` redirect rule to forward port 443 → 16441. claudovka listens on `:16441`, reads the TLS SNI from the ClientHello to determine the target domain, then performs the same MITM logic.
 
 Certificates are generated on demand and cached in memory. The CA private key never leaves your machine.
 

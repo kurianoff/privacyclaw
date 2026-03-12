@@ -10,9 +10,66 @@
 
 <div id="topbar">
   <div id="status-dot"></div>
-  <h1>Claudovka</h1>
+  <h1>Claudovka<span id="version-badge" style="font-size:0.75em;opacity:0.6;margin-left:8px"></span></h1>
   <span id="counter">0 conversations</span>
   <input id="search" type="search" placeholder="Filter conversations…">
+  <button id="settings-btn" title="Settings">⚙</button>
+</div>
+
+<div id="settings-panel">
+  <div class="settings-header">
+    <h2>Settings</h2>
+    <button id="settings-close">×</button>
+  </div>
+
+  <!-- Restart banner -->
+  <div id="restart-banner" class="restart-banner hidden">
+    Port change saved — restart claudovka to apply
+    <button id="restart-banner-dismiss">×</button>
+  </div>
+
+  <!-- Proxy status section -->
+  <div class="settings-section">
+    <h3>Proxy</h3>
+    <div class="toggle-row">
+      <div class="proxy-status-dot stopped" id="proxy-status-dot"></div>
+      <button id="proxy-start-stop" data-running="true">Stop Proxy</button>
+    </div>
+  </div>
+
+  <!-- PII section -->
+  <div class="settings-section">
+    <h3>PII Protection</h3>
+    <div class="toggle-row">
+      <label>Mode:</label>
+      <select id="pii-mode-select" class="pii-mode-select">
+        <option value="off">Off</option>
+        <option value="detect-only">Detect Only</option>
+        <option value="replace">Replace</option>
+      </select>
+    </div>
+    <div class="toggle-row">
+      <label>Tier 1 — Regex</label>
+      <input type="checkbox" id="tier1-toggle" class="toggle-checkbox">
+    </div>
+    <div class="toggle-row">
+      <label>Tier 2 — NER</label>
+      <input type="checkbox" id="tier2-toggle" class="toggle-checkbox">
+    </div>
+    <div class="toggle-row">
+      <label>Tier 3 — SLM</label>
+      <input type="checkbox" id="tier3-toggle" class="toggle-checkbox">
+    </div>
+  </div>
+
+  <!-- Model management section -->
+  <div class="settings-section">
+    <h3>Model Management</h3>
+    <table class="model-table">
+      <thead><tr><th>Model</th><th>Size</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody id="model-table-body"></tbody>
+    </table>
+  </div>
 </div>
 
 <div id="main">
@@ -22,15 +79,49 @@
 
   <div id="detail">
     <div id="detail-header">
-      <h2>Select a conversation</h2>
-      <div id="detail-meta"></div>
+      <div id="detail-title">
+        <h2>Select a conversation</h2>
+        <div id="detail-meta"></div>
+      </div>
+      <button id="compare-btn" class="compare-btn hidden" title="Toggle 4-column PII compare view">Compare</button>
     </div>
     <div id="messages">
       <div class="empty-state">Select a conversation from the left panel</div>
+    </div>
+    <div id="detection-sidebar" class="hidden"></div>
+    <div id="pii-panel" class="pii-panel hidden">
+      <div class="pii-panel-header" id="pii-panel-toggle">
+        <span class="pii-panel-title">PII Detections</span>
+        <span class="pii-panel-count" id="pii-count">0</span>
+        <span class="pii-panel-chevron" id="pii-chevron">&#9660;</span>
+      </div>
+      <div class="pii-panel-body" id="pii-panel-body">
+        <table class="pii-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>Original</th>
+              <th>Synthetic</th>
+              <th>Tier</th>
+              <th>Confidence</th>
+            </tr>
+          </thead>
+          <tbody id="pii-table-body"></tbody>
+        </table>
+      </div>
     </div>
   </div>
 </div>
 
 <script src="/app.js"></script>
+<script>
+fetch('/api/version')
+  .then(r => r.json())
+  .then(d => {
+    const el = document.getElementById('version-badge');
+    if (el) el.textContent = 'v' + d.version;
+  })
+  .catch(() => {});
+</script>
 </body>
 </html>

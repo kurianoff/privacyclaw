@@ -27,14 +27,20 @@ pub async fn run(
     cert_cache: CertCache,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
 ) -> Result<()> {
     let addr = &config.network_proxy.listen;
 
     // Single ServerConfig shared across all connections; cert resolution is per-SNI.
+    // Advertise http/1.1 only — forces the client to downgrade from h2 so our
+    // HTTP/1.1 intercept can parse and forward requests correctly.
+    // (h2 transparent bridging causes CLOSE_WAIT deadlocks when Anthropic sends GOAWAY
+    // but the h2 client keeps the connection open expecting stream reuse.)
     let resolver = Arc::new(SniCertResolver { cert_cache });
-    let server_cfg = ServerConfig::builder()
+    let mut server_cfg = ServerConfig::builder()
         .with_no_client_auth()
         .with_cert_resolver(resolver);
+    server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
 
     let listener = TcpListener::bind(addr).await
@@ -42,13 +48,14 @@ pub async fn run(
     tracing::warn!(addr = %addr, "network proxy bound");
 
     // Build upstream TLS client config once — shared across all connections via Arc.
+    // Use http/1.1 only upstream to match the forced client downgrade above.
     let mut root_store = RootCertStore::empty();
     root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-    let client_cfg = Arc::new(
-        ClientConfig::builder()
-            .with_root_certificates(root_store)
-            .with_no_client_auth(),
-    );
+    let mut upstream_client_cfg = ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+    upstream_client_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
+    let client_cfg = Arc::new(upstream_client_cfg);
 
     loop {
         let (stream, peer_addr) = match listener.accept().await {
@@ -68,11 +75,12 @@ pub async fn run(
         let acceptor = acceptor.clone();
         let store = store.clone();
         let ws_tx = ws_tx.clone();
+        let pii = pii.clone();
         let client_cfg = client_cfg.clone();
 
         tokio::spawn(async move {
             tracing::debug!(peer_addr = %peer_addr, "network: connection task started");
-            if let Err(e) = handle(stream, config, acceptor, store, ws_tx, client_cfg).await {
+            if let Err(e) = handle(stream, config, acceptor, store, ws_tx, pii, client_cfg).await {
                 tracing::warn!(peer_addr = %peer_addr, err = %e, "network: connection handler error");
             }
             tracing::debug!(peer_addr = %peer_addr, "network: connection task finished");
@@ -86,6 +94,7 @@ async fn handle(
     acceptor: TlsAcceptor,
     store: Store,
     ws_tx: broadcast::Sender<WsEvent>,
+    pii: crate::pii::PiiCtx,
     client_cfg: Arc<ClientConfig>,
 ) -> Result<()> {
     // Peek at the ClientHello to get SNI BEFORE committing to a TLS handshake.
@@ -122,10 +131,13 @@ async fn handle(
 
     // TLS accept — SniCertResolver generates a leaf cert for `host`.
     // Works because peek() left the ClientHello bytes unconsumed.
+    // The server advertises http/1.1 only so the client downgrades from h2;
+    // we log the negotiated protocol for diagnostics.
     tracing::debug!(host = %host, "network: starting client TLS handshake");
     let client_tls = acceptor.accept(stream).await
         .context("Network mode: client TLS handshake failed")?;
-    tracing::info!(host = %host, "network: client TLS handshake done");
+    let negotiated = client_tls.get_ref().1.alpn_protocol().map(|p| p.to_vec());
+    tracing::info!(host = %host, alpn = ?negotiated.as_deref().and_then(|p| std::str::from_utf8(p).ok()), "network: client TLS handshake done");
 
     // Resolve the real upstream IP, bypassing /etc/hosts (which points to us).
     tracing::debug!(host = %host, "network: resolving DNS (bypass /etc/hosts)");
@@ -154,7 +166,7 @@ async fn handle(
     crate::proxy::intercept::run(
         client_reader, client_writer,
         upstream_reader, upstream_writer,
-        host, store, ws_tx,
+        host, store, ws_tx, pii,
     ).await
 }
 
@@ -249,6 +261,126 @@ fn peek_sni(buf: &[u8]) -> Option<String> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::Config;
+
+    // ─── SNI extraction tests (6.1–6.3) ──────────────────────────────────────
+
+    /// Build a minimal TLS ClientHello containing an SNI extension for `hostname`.
+    fn make_client_hello(hostname: &str) -> Vec<u8> {
+        let name_bytes = hostname.as_bytes();
+        let name_len = name_bytes.len();
+        // SNI extension data: list_len(2) + name_type(1) + name_len(2) + name
+        let sni_data_len = 2 + 1 + 2 + name_len;
+        let ext_len = sni_data_len;
+        let ext_block_len = 4 + ext_len; // type(2) + len(2) + data
+        // ClientHello body length
+        let hello_len = 2 + 32 + 1 + 2 + 2 + 1 + 1 + 2 + ext_block_len;
+        // Handshake length = 1(type) + 3(len) + hello_body — but peek_sni reads hs.get(4..4+hs_len)
+        // where hs = buf[5..], so hs_len is the hello_body length only.
+        let hs_len = hello_len;
+        let record_body_len = (1 + 3 + hs_len) as u16; // handshake type + 3-byte len + body
+
+        let mut buf: Vec<u8> = Vec::new();
+        // TLS record header
+        buf.push(0x16); // content_type: handshake
+        buf.extend_from_slice(&[0x03, 0x01]); // version TLS 1.0
+        buf.extend_from_slice(&record_body_len.to_be_bytes());
+        // Handshake header
+        buf.push(0x01); // ClientHello
+        // 3-byte big-endian length of the ClientHello body
+        buf.push(0);
+        buf.extend_from_slice(&(hello_len as u16).to_be_bytes());
+        // legacy_version
+        buf.extend_from_slice(&[0x03, 0x03]);
+        // random (32 bytes)
+        buf.extend_from_slice(&[0u8; 32]);
+        // session_id_len = 0
+        buf.push(0);
+        // cipher_suites: length(2) + 1 suite(2)
+        buf.extend_from_slice(&[0x00, 0x02, 0x00, 0x2F]);
+        // compression_methods: length(1) + null(1)
+        buf.extend_from_slice(&[0x01, 0x00]);
+        // extensions total length
+        buf.extend_from_slice(&(ext_block_len as u16).to_be_bytes());
+        // SNI extension
+        buf.extend_from_slice(&[0x00, 0x00]); // ext_type = 0 (SNI)
+        buf.extend_from_slice(&(ext_len as u16).to_be_bytes());
+        // SNI list: list_len(2) + name_type(1) + name_len(2) + name
+        buf.extend_from_slice(&((1 + 2 + name_len) as u16).to_be_bytes());
+        buf.push(0x00); // name_type: host_name
+        buf.extend_from_slice(&(name_len as u16).to_be_bytes());
+        buf.extend_from_slice(name_bytes);
+        buf
+    }
+
+    #[test]
+    fn test_peek_sni_extracts_hostname() {
+        let buf = make_client_hello("api.anthropic.com");
+        let result = peek_sni(&buf);
+        assert_eq!(result, Some("api.anthropic.com".to_string()),
+            "expected SNI = api.anthropic.com, got {result:?}");
+    }
+
+    #[test]
+    fn test_peek_sni_returns_none_for_garbage() {
+        // First byte != 0x16 → not a TLS handshake record.
+        assert_eq!(peek_sni(&[0x00, 0x01, 0x02, 0x03]), None);
+    }
+
+    #[test]
+    fn test_peek_sni_returns_none_for_truncated_buffer() {
+        // Only 3 bytes — too short even for the record header (needs 5).
+        assert_eq!(peek_sni(&[0x16, 0x03, 0x01]), None);
+    }
+
+    // ─── Intercept decision tests (6.4–6.5) ──────────────────────────────────
+
+    #[test]
+    fn test_intercept_decision_known_hosts() {
+        let cfg = Config::default();
+        assert!(cfg.is_intercepted("api.anthropic.com"),
+            "api.anthropic.com should be intercepted by default");
+        assert!(cfg.is_intercepted("api.openai.com"),
+            "api.openai.com should be intercepted by default");
+    }
+
+    #[test]
+    fn test_intercept_decision_unknown_host() {
+        let cfg = Config::default();
+        assert!(!cfg.is_intercepted("example.com"),
+            "example.com must NOT be intercepted");
+        assert!(!cfg.is_intercepted("google.com"),
+            "google.com must NOT be intercepted");
+    }
+
+    // ─── DNS packet format test (6.6) ────────────────────────────────────────
+
+    #[test]
+    fn test_dns_query_packet_format() {
+        let pkt = build_dns_a_query("example.com");
+        // Transaction ID
+        assert_eq!(&pkt[0..2], &[0xAB, 0xCD], "wrong transaction ID");
+        // QDCOUNT = 1
+        assert_eq!(&pkt[4..6], &[0x00, 0x01], "QDCOUNT must be 1");
+        // Label-encoded QNAME: [7]"example"[3]"com"[0]
+        let qname: Vec<u8> = [7u8].iter()
+            .chain(b"example")
+            .chain(&[3u8])
+            .chain(b"com")
+            .chain(&[0u8])
+            .copied()
+            .collect();
+        let found = pkt.windows(qname.len()).any(|w| w == qname.as_slice());
+        assert!(found, "label-encoded QNAME not found in DNS packet");
+        // Ends with QTYPE=A(1), QCLASS=IN(1)
+        assert_eq!(pkt.last_chunk::<4>(), Some(&[0x00, 0x01, 0x00, 0x01]),
+            "packet must end with QTYPE=A QCLASS=IN");
+    }
 }
 
 // ─── DNS resolver that bypasses /etc/hosts ───────────────────────────────────

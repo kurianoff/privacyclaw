@@ -141,6 +141,7 @@ pub fn extract_tokens(body: &[u8]) -> (Option<i64>, Option<i64>) {
 }
 
 /// Extract full content from non-streaming Anthropic response.
+#[allow(dead_code)]
 pub fn extract_response_content(body: &[u8]) -> Option<String> {
     let v: Value = serde_json::from_slice(body).ok()?;
     let content = v.get("content")?.as_array()?;

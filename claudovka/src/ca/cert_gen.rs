@@ -41,9 +41,10 @@ impl CertCache {
         }
         tracing::info!(domain = %domain, "cert_gen: cache miss, generating cert");
         let ck = self.get_or_create_key_inner(domain)?;
-        let server_cfg = ServerConfig::builder()
+        let mut server_cfg = ServerConfig::builder()
             .with_no_client_auth()
             .with_cert_resolver(Arc::new(SingleKeyResolver(ck)));
+        server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
         let arc_cfg = Arc::new(server_cfg);
         cache.insert(domain.to_string(), arc_cfg.clone());
         tracing::info!(domain = %domain, "cert_gen: cert generated");

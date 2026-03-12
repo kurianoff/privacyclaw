@@ -68,6 +68,7 @@ pub fn extract_tokens(body: &[u8]) -> (Option<i64>, Option<i64>) {
 }
 
 /// Extract full content from a non-streaming OpenAI response.
+#[allow(dead_code)]
 pub fn extract_response_content(body: &[u8]) -> Option<String> {
     let v: Value = serde_json::from_slice(body).ok()?;
     v.get("choices")?

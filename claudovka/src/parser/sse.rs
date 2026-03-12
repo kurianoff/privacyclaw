@@ -19,6 +19,10 @@ impl SseParser {
     /// Feed raw bytes; returns any complete SSE events parsed.
     pub fn push(&mut self, bytes: &[u8]) -> Vec<SseEvent> {
         tracing::debug!(input_bytes = bytes.len(), buf_len = self.buffer.len(), "sse: push called");
+        tracing::trace!(
+            hex = %crate::util::fmt_chunk_hex(bytes, 256),
+            "sse: push input hex"
+        );
         self.buffer.extend_from_slice(bytes);
         let mut events = Vec::new();
 
@@ -36,6 +40,14 @@ impl SseParser {
                 );
                 events.push(event);
             }
+        }
+
+        if events.is_empty() && !self.buffer.is_empty() {
+            tracing::trace!(
+                buf_len = self.buffer.len(),
+                buf_hex = %crate::util::fmt_chunk_hex(&self.buffer, 256),
+                "sse: no events found, buffer state"
+            );
         }
 
         events
@@ -233,5 +245,17 @@ mod tests {
         let elapsed_ms = start.elapsed().as_millis();
         assert_eq!(events.len(), 5000, "should parse all 5000 events");
         assert!(elapsed_ms < 100, "parsing 5000 events took {}ms, expected < 100ms", elapsed_ms);
+    }
+
+    #[test]
+    fn test_1mb_data_line_no_panic() {
+        // A single SSE event with a ~1 MB data line must parse without panicking or OOMing.
+        let payload = "x".repeat(1024 * 1024);
+        let raw = format!("data: {payload}\n\n");
+        let mut parser = SseParser::new();
+        let events = parser.push(raw.as_bytes());
+        assert_eq!(events.len(), 1, "expected exactly 1 event from 1 MB data line");
+        assert_eq!(events[0].data.len(), payload.len(),
+            "event data length should equal payload length");
     }
 }

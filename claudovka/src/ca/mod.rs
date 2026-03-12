@@ -141,6 +141,38 @@ fn print_manual_instructions(cert_path: &Path) {
     println!("  Windows: certutil -addstore -user Root {:?}", cert_path);
 }
 
+/// §9.T1: Returns `true` when the CA PEM already exists in `ca_dir`,
+/// indicating the postinstall CA generation step should be skipped.
+///
+/// This function mirrors the shell-script guard in `packaging/postinstall`:
+///   `if [ -f "$CA_PEM" ]; then echo "CA already exists — skipping"; fi`
+#[allow(dead_code)]
+pub fn postinstall_should_skip_ca(ca_dir: &Path) -> bool {
+    ca_dir.join("ca.pem").exists()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// §9.T1: `postinstall_should_skip_ca` returns false when no ca.pem exists.
+    #[test]
+    fn postinstall_should_skip_ca_returns_false_when_absent() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        assert!(!postinstall_should_skip_ca(tmp.path()),
+            "should return false when ca.pem is absent");
+    }
+
+    /// §9.T1: `postinstall_should_skip_ca` returns true when ca.pem exists.
+    #[test]
+    fn postinstall_should_skip_ca_returns_true_when_present() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        std::fs::write(tmp.path().join("ca.pem"), b"--- BEGIN CERTIFICATE ---").unwrap();
+        assert!(postinstall_should_skip_ca(tmp.path()),
+            "should return true when ca.pem is present");
+    }
+}
+
 fn pem_cert_to_der(pem: &str) -> Result<Vec<u8>> {
     let mut cursor = std::io::Cursor::new(pem.as_bytes());
     let item = rustls_pemfile::certs(&mut cursor)
