@@ -11,26 +11,11 @@ use claudovka::pii::{Locale, PiiPipeline};
 
 // ── §12a – PII Mode integration tests ────────────────────────────────────────
 
-/// §12a.1: When pii.mode = "off" the proxy skips the pipeline entirely.
-/// Contract: if the caller respects the mode flag and does not call
-/// process_request_body, the bytes are identical before and after.
+/// §12a.1: PiiConfig default mode is "off".
 #[test]
 fn pii_mode_off_pipeline_not_called() {
-    let body = serde_json::json!({
-        "model": "gpt-4o",
-        "messages": [{"role": "user", "content": "Contact me at contact@example.com"}]
-    });
-    let body_bytes = serde_json::to_vec(&body).unwrap();
-
-    // With mode = "off" the caller does NOT invoke the pipeline.
-    // We prove the bytes are unchanged by not calling process_request_body.
-    let cfg = PiiConfig::default(); // mode = "off"
+    let cfg = PiiConfig::default();
     assert_eq!(cfg.mode, "off");
-
-    // Simulate the bypass: body_bytes flows through unmodified.
-    let forwarded = body_bytes.clone();
-    assert_eq!(forwarded, body_bytes,
-        "off-mode: bytes must be identical when pipeline is bypassed");
 }
 
 /// §12a.2: mode = "detect-only" — body bytes stay unchanged.
@@ -233,28 +218,12 @@ async fn test_tier3_timeout_returns_candidates_unchanged() {
 /// request — pipeline processes the request and modifies the body.
 #[test]
 fn pii_mode_switch_off_to_replace_takes_effect() {
-    // Mode=off: email in body is NOT redacted (caller bypasses pipeline entirely).
-    let cfg_off = PiiConfig::default(); // mode = "off"
-    assert_eq!(cfg_off.mode, "off", "default PiiConfig must have mode=off");
-
     let body = serde_json::json!({
         "model": "gpt-4o",
         "messages": [{"role": "user", "content": "Email me at test@example.com"}]
     });
     let body_bytes = serde_json::to_vec(&body).unwrap();
 
-    // With mode=off the caller does NOT call process_request_body; simulate bypass.
-    let forwarded_off = body_bytes.clone();
-    let content_off: serde_json::Value = serde_json::from_slice(&forwarded_off).unwrap();
-    let text_off = content_off["messages"][0]["content"].as_str().unwrap();
-    assert!(text_off.contains("test@example.com"), "mode=off: email must pass through unchanged");
-
-    // Switch to replace mode.
-    let mut cfg_replace = PiiConfig::default();
-    cfg_replace.mode = "replace".to_string();
-    assert_eq!(cfg_replace.mode, "replace");
-
-    // Now call the pipeline — it must redact the email.
     let mut vault = PiiVault::new("switch-off-to-replace");
     let result = PiiPipeline::process_request_body(
         &body_bytes, &mut vault, Provider::OpenAI, &Locale::EnUs,
