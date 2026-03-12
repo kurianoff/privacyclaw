@@ -17,7 +17,13 @@ const MAX_SSE_BUFFER: usize = 10 * 1024 * 1024; // 10 MB
 const READ_BUF: usize = 65536;
 
 /// Number of retry attempts when polling a shared value with backoff.
+#[cfg(not(test))]
 const BACKOFF_ATTEMPTS: usize = 5;
+/// Extended in test builds: saturated Tokio runtimes under parallel execution
+/// need up to 500 ms for spawn_blocking (DB lookup) to complete. Follows the
+/// same #[cfg(test)] pattern as UPSTREAM_READ_TIMEOUT above.
+#[cfg(test)]
+const BACKOFF_ATTEMPTS: usize = 50;
 /// Sleep duration between each backoff retry (total wait: BACKOFF_ATTEMPTS × this).
 const BACKOFF_SLEEP_MS: u64 = 10;
 
