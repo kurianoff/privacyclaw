@@ -487,10 +487,35 @@ impl VaultRegistry {
                 tracing::info!(from_key = %from_key, into_key = %into_key, "vault: merged session_uuid vault into real conv_id vault");
             }
         } else {
-            // into_key doesn't exist yet — just re-key the entry.
-            let _ = Self::load_or_create(into_key, store); // ensure storage is checked
+            // into_key doesn't exist yet in the in-memory cache. Load any persisted
+            // vault from storage so we don't clobber prior mappings for this conv_id.
+            let persisted = Self::load_or_create(into_key, store);
+            let merged_handle = if persisted.is_empty() {
+                // No prior persisted vault — simply re-key the from_key handle.
+                from_entry.handle
+            } else {
+                // Prior persisted vault exists — merge from_key mappings into it.
+                let from_vault = from_entry.handle.read().unwrap();
+                let mut into_vault = persisted;
+                for (orig, syn, label, tier, conf) in from_vault.quints() {
+                    if into_vault.original_to_synthetic.contains_key(orig) {
+                        continue;
+                    }
+                    into_vault.insert_mapping_raw(
+                        orig.to_string(),
+                        syn.to_string(),
+                        label.to_string(),
+                        tier,
+                        conf,
+                    );
+                }
+                if !from_vault.is_empty() {
+                    into_vault.rebuild_automaton();
+                }
+                Arc::new(RwLock::new(into_vault))
+            };
             map.insert(into_key.to_string(), VaultEntry {
-                handle: from_entry.handle,
+                handle: merged_handle,
                 last_accessed: Instant::now(),
             });
             tracing::info!(from_key = %from_key, into_key = %into_key, "vault: re-keyed session_uuid vault to real conv_id");
