@@ -39,9 +39,11 @@ Start the proxy. Without `--mode`, respects `network_proxy.enabled` in config fo
 | `--mode` value | What starts |
 |---|---|
 | `http` | HTTP CONNECT proxy + dashboard |
-| `network` | Transparent network proxy only |
-| `all` | Both HTTP and network proxies |
-| *(omitted)* | HTTP always; network only if `network_proxy.enabled = true` in config |
+| `network` | Transparent network proxy + dashboard |
+| `all` | Both HTTP and network proxies + dashboard |
+| *(omitted)* | HTTP always + dashboard; network only if `network_proxy.enabled = true` in config |
+
+> **Note:** The dashboard (`http://127.0.0.1:16443`) always starts regardless of mode.
 
 ```bash
 claudovka start                     # HTTP + dashboard (network if configured)
