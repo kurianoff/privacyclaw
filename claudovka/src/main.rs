@@ -69,6 +69,24 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(clap::ValueEnum, Clone, Debug, Default)]
+pub enum StartMode {
+    #[default]
+    All,
+    Http,
+    Network,
+}
+
+impl std::fmt::Display for StartMode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            StartMode::All     => write!(f, "all"),
+            StartMode::Http    => write!(f, "http"),
+            StartMode::Network => write!(f, "network"),
+        }
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Generate CA certificate and print setup instructions
@@ -77,8 +95,11 @@ enum Commands {
         #[arg(long)]
         install_ca: bool,
     },
-    /// Start the CONNECT proxy and dashboard (configure apps with HTTPS_PROXY)
+    /// Start the proxy
     Start {
+        /// Which proxy mode to run (default: all)
+        #[arg(long, value_enum)]
+        mode: Option<StartMode>,
         /// Enable PII replace mode (Tier 1+2)
         #[arg(long)]
         pii: bool,
@@ -86,7 +107,8 @@ enum Commands {
         #[arg(long)]
         tray: bool,
     },
-    /// Start the network-level transparent proxy (requires /etc/hosts + pf redirect)
+    /// (Deprecated) Use `start --mode network` instead
+    #[command(hide = true)]
     NetworkStart {
         #[arg(long)]
         pii: bool,
@@ -182,7 +204,7 @@ fn main() -> Result<()> {
 
     // Detect tray mode before committing a runtime strategy.
     let use_tray = cfg!(all(target_os = "macos", feature = "tray"))
-        && matches!(&cli.command, Commands::Start { tray: true, .. });
+        && matches!(&cli.command, Commands::Start { tray: true, .. } );
 
     if use_tray {
         #[cfg(all(target_os = "macos", feature = "tray"))]
@@ -228,11 +250,11 @@ async fn async_main(cli: Cli) -> Result<()> {
 
     match cli.command {
         Commands::Init { install_ca } => cmd_init(&cfg, install_ca).await,
-        Commands::Start { pii, .. } => {
-            cmd_start(cfg, cfg_mgr, pii, tray_shutdown).await
+        Commands::Start { mode, pii, .. } => {
+            cmd_start(cfg, cfg_mgr, pii, mode, tray_shutdown).await
         }
         Commands::NetworkStart { pii } => {
-            cmd_network_start(cfg, cfg_mgr, pii).await
+            cmd_start(cfg, cfg_mgr, pii, Some(StartMode::Network), tray_shutdown).await
         }
         Commands::SetupNetwork    => cmd_setup_network(&cfg),
         Commands::CaPath          => cmd_ca_path(&cfg),
@@ -276,10 +298,12 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let pii_flag = match &cli.command {
-        Commands::Start { pii, .. } => *pii,
+    let (pii_flag, tray_mode) = match &cli.command {
+        Commands::Start { pii, mode, .. } => (*pii, mode.clone()),
         _ => unreachable!(),
     };
+    // When no --mode is given, tray mode defaults to All.
+    let tray_mode = tray_mode.unwrap_or(StartMode::All);
 
     let dashboard_url    = format!("http://{}", cfg.proxy.dashboard);
     let network_proxy_on = crate::network_helper::is_enabled();
@@ -298,7 +322,7 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         let cfg_mgr   = ConfigManager::new(cfg, Some(config_path));
         let shutdown2 = shutdown.clone();
         rt.spawn(async move {
-            if let Err(e) = cmd_start(cfg2, cfg_mgr, pii_flag, shutdown2).await {
+            if let Err(e) = cmd_start(cfg2, cfg_mgr, pii_flag, Some(tray_mode), shutdown2).await {
                 tracing::error!(err = %e, "proxy error");
             }
         });
@@ -435,17 +459,42 @@ async fn cmd_start(
     cfg: Config,
     cfg_mgr: Arc<ConfigManager>,
     pii_flag: bool,
+    mode: Option<StartMode>,
     tray_shutdown: Arc<Notify>,
 ) -> Result<()> {
     let ca_dir = default_ca_dir();
     let bundle = ca::load_ca(&ca_dir)?
         .context("CA not initialized. Run `claudovka init` first.")?;
 
-    println!("MITM proxy (CONNECT) on {}", cfg.proxy.listen);
-    println!("Dashboard at http://{}", cfg.proxy.dashboard);
-    println!("Intercepting: {}", cfg.intercept.domains.join(", "));
-    println!("\nConfigure your client:");
-    println!("  export HTTPS_PROXY=http://{}", cfg.proxy.listen);
+    // Resolve effective mode:
+    // - Explicit --mode flag → use exactly as specified, ignore cfg.network_proxy.enabled.
+    // - No --mode (None) → default to All, but still respect cfg.network_proxy.enabled for
+    //   the network proxy so that existing configs and e2e tests are unaffected.
+    let effective_mode = mode.as_ref().unwrap_or(&StartMode::All);
+    let run_http = !matches!(effective_mode, StartMode::Network);
+    let run_net = matches!(effective_mode, StartMode::Network | StartMode::All)
+        && (mode.is_some() || cfg.network_proxy.enabled);
+
+    let mode_label = match (run_http, run_net) {
+        (true, true)   => "all",
+        (true, false)  => "http",
+        (false, true)  => "network",
+        (false, false) => "http",   // fallback, shouldn't happen
+    };
+    tracing::warn!(mode = mode_label, "proxy starting");
+    tracing::debug!(explicit = mode.is_some(), run_http, run_net, "mode selection");
+
+    if run_http {
+        println!("MITM proxy (CONNECT) on {}", cfg.proxy.listen);
+        println!("Dashboard at http://{}", cfg.proxy.dashboard);
+        println!("Intercepting: {}", cfg.intercept.domains.join(", "));
+        println!("\nConfigure your client:");
+        println!("  export HTTPS_PROXY=http://{}", cfg.proxy.listen);
+    } else {
+        println!("Network proxy on {}", cfg.network_proxy.listen);
+        println!("Dashboard at http://{}", cfg.proxy.dashboard);
+        println!("Intercepting: {}", cfg.intercept.domains.join(", "));
+    }
     println!("\nPress Ctrl+C to stop.\n");
 
     let logs_dir = cfg.resolved_logs_dir();
@@ -470,22 +519,25 @@ async fn cmd_start(
     let proxy_state = dashboard::ProxyState::new();
     let download_tracker = crate::models::DownloadTracker::new();
 
-    tracing::warn!("starting claudovka in CONNECT mode");
     if let Err(e) = pid::write_pid() {
         tracing::warn!(err = %e, "failed to write PID file");
     }
 
-    let proxy_task = {
+    let proxy_task = if run_http {
+        tracing::debug!("spawning CONNECT proxy task");
         let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
         tokio::spawn(async move {
             if let Err(e) = proxy::run(c, cc, s, w, p).await {
                 tracing::error!(err = %e, detail = ?e, "proxy error");
             }
         })
+    } else {
+        tracing::debug!("CONNECT proxy not started (mode=network)");
+        tokio::spawn(std::future::pending::<()>())
     };
 
-    let net_task = if cfg.network_proxy.enabled {
-        tracing::warn!("starting network proxy alongside CONNECT proxy");
+    let net_task = if run_net {
+        tracing::debug!("spawning network proxy task");
         let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
         tokio::spawn(async move {
             if let Err(e) = proxy::network::run(c, cc, s, w, p).await {
@@ -493,6 +545,7 @@ async fn cmd_start(
             }
         })
     } else {
+        tracing::debug!("network proxy not started");
         tokio::spawn(std::future::pending::<()>())
     };
 
@@ -522,84 +575,6 @@ async fn cmd_start(
         }
         _ = tray_shutdown.notified() => {
             tracing::warn!("shutting down claudovka via tray");
-        }
-        _ = tokio::signal::ctrl_c() => {
-            tracing::warn!("shutting down claudovka");
-            println!("\nShutting down.");
-        }
-    }
-    pid::remove_pid();
-    Ok(())
-}
-
-async fn cmd_network_start(cfg: Config, cfg_mgr: Arc<ConfigManager>, pii_flag: bool) -> Result<()> {
-    let ca_dir = default_ca_dir();
-    let bundle = ca::load_ca(&ca_dir)?
-        .context("CA not initialized. Run `claudovka init` first.")?;
-
-    println!("Network proxy on {}", cfg.network_proxy.listen);
-    println!("Dashboard at http://{}", cfg.proxy.dashboard);
-    println!("Intercepting: {}", cfg.intercept.domains.join(", "));
-    println!("\nPress Ctrl+C to stop.\n");
-
-    let logs_dir = cfg.resolved_logs_dir();
-    let store = storage::Store::open(&logs_dir)
-        .with_context(|| format!("Failed to open log dir: {:?}", logs_dir))?;
-    tracing::info!(logs_dir = %logs_dir.display(), "store opened");
-
-    let cert_cache = ca::cert_gen::CertCache::new(bundle);
-    tracing::info!("cert cache initialised");
-
-    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
-    if let Some(ref p) = pii {
-        let registry = Arc::clone(&p.registry);
-        tokio::spawn(async move {
-            let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
-            loop { interval.tick().await; registry.evict_expired(); }
-        });
-    }
-
-    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
-    let cfg = Arc::new(cfg);
-    let proxy_state = dashboard::ProxyState::new();
-    let download_tracker = crate::models::DownloadTracker::new();
-
-    tracing::warn!("starting claudovka in network mode");
-    if let Err(e) = pid::write_pid() {
-        tracing::warn!(err = %e, "failed to write PID file");
-    }
-
-    let net_task = {
-        let (c, cc, s, w, p) = (cfg.clone(), cert_cache.clone(), store.clone(), ws_tx.clone(), pii.clone());
-        tokio::spawn(async move {
-            if let Err(e) = proxy::network::run(c, cc, s, w, p).await {
-                tracing::error!(err = %e, detail = ?e, "network proxy error");
-            }
-        })
-    };
-
-    let dashboard_task = {
-        let addr = cfg.proxy.dashboard.clone();
-        let (s, w, m, ps, dt) = (store.clone(), ws_tx.clone(), cfg_mgr.clone(), proxy_state.clone(), download_tracker.clone());
-        tokio::spawn(async move {
-            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt).await {
-                tracing::error!(err = %e, detail = ?e, "dashboard error");
-            }
-        })
-    };
-
-    let rotation_task = {
-        let s = store.clone();
-        tokio::spawn(rotation_loop(s))
-    };
-
-    tokio::select! {
-        _ = net_task => {}
-        _ = dashboard_task => {}
-        _ = rotation_task => {}
-        _ = proxy_state.shutdown.notified() => {
-            tracing::warn!("shutting down claudovka via dashboard");
-            println!("\nShutting down.");
         }
         _ = tokio::signal::ctrl_c() => {
             tracing::warn!("shutting down claudovka");
