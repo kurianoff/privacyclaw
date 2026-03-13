@@ -45,6 +45,8 @@ fancy-regex = "0.13"
 fake = { version = "2.9", features = ["derive"] }
 rand = { version = "0.8", features = ["small_rng"] }
 reqwest = { version = "0.12", features = ["json", "stream"] }
+dialoguer = { version = "0.11", features = ["fuzzy-select"] }
+indicatif = "0.17"
 ort = { version = "=2.0.0-rc.10", features = ["download-binaries"], optional = true }
 tokenizers = { version = "0.19", optional = true }
 ndarray = { version = "0.16", optional = true }
@@ -132,3 +134,7 @@ path = "tests/detection_log_test.rs"
 [[test]]
 name = "vault_confidence_test"
 path = "tests/vault_confidence_test.rs"
+
+[[test]]
+name = "config_cmd_test"
+path = "tests/config_cmd_test.rs"

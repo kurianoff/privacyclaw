@@ -1,4 +1,5 @@
 mod ca;
+mod cmd_config;
 mod config;
 mod dashboard;
 mod models;
@@ -22,6 +23,7 @@ use std::sync::Arc;
 use tokio::sync::{broadcast, Notify};
 use crate::pii::{PiiCtx, PiiContext, PiiMode, PiiPipeline};
 use crate::pii::vault::VaultRegistry;
+use crate::cmd_config::ConfigAction;
 use std::time::Duration;
 
 const VAULT_EVICT_INTERVAL: Duration = Duration::from_secs(60);
@@ -136,6 +138,21 @@ enum Commands {
         #[arg(long)]
         purge: bool,
     },
+    /// Manage claudovka configuration
+    Config {
+        #[command(subcommand)]
+        action: Option<ConfigAction>,
+
+        /// Set protection level directly (bypasses wizard).
+        /// Values: off | detect | 1 | 2 | 3 | intelligent
+        #[arg(long, value_name = "LEVEL")]
+        protection_level: Option<String>,
+
+        /// GGUF model ID or file path for levels 3 and intelligent.
+        /// Defaults to phi3-mini if not specified.
+        #[arg(long, value_name = "MODEL")]
+        model: Option<String>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -228,6 +245,8 @@ async fn async_main(cli: Cli) -> Result<()> {
         Commands::NetworkEnable    => cmd_network_enable(&cfg).await,
         Commands::NetworkDisable   => cmd_network_disable().await,
         Commands::Uninstall { purge } => cmd_uninstall(purge).await,
+        Commands::Config { action, protection_level, model } =>
+            cmd_config::cmd_config(cfg, cfg_mgr, action, protection_level, model).await,
     }
 }
 

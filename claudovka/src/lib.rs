@@ -1,4 +1,5 @@
 pub mod ca;
+pub mod cmd_config;
 pub mod config;
 pub mod dashboard;
 pub mod models;

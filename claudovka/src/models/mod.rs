@@ -1,3 +1,4 @@
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::HashMap;
@@ -476,6 +477,76 @@ mod tests {
         std::fs::write(dir.join("mymodel.gguf"), b"x").unwrap();
         assert!(is_downloaded(dir, "mymodel"));
     }
+}
+
+/// Downloads a catalog model to `models_dir`, verifying its checksum, and
+/// renders an `indicatif` progress bar to the terminal.
+///
+/// Uses a `.tmp` staging file so a failed download never leaves a partial
+/// GGUF on disk.
+pub async fn download_with_bar(info: &'static ModelInfo, models_dir: &std::path::Path) -> anyhow::Result<()> {
+    tokio::fs::create_dir_all(models_dir).await?;
+
+    let filename = info
+        .url
+        .rsplit('/')
+        .next()
+        .unwrap_or(info.id);
+    let dest = models_dir.join(filename);
+    let tmp = dest.with_extension("tmp");
+
+    tracing::info!(
+        model_id = info.id,
+        dest = %dest.display(),
+        "downloading model"
+    );
+
+    let client = reqwest::Client::new();
+    let resp = client.get(info.url).send().await?;
+    if !resp.status().is_success() {
+        anyhow::bail!("download failed: HTTP {}", resp.status());
+    }
+
+    let total = resp.content_length().unwrap_or(0);
+    let pb = ProgressBar::new(total);
+    pb.set_style(
+        ProgressStyle::with_template("{msg} [{wide_bar}] {bytes}/{total_bytes} ({eta})")?
+            .progress_chars("=>-"),
+    );
+    pb.set_message(info.name.to_string());
+
+    let mut file = tokio::fs::File::create(&tmp).await?;
+    let mut stream = resp;
+    let mut downloaded = 0u64;
+    let mut hasher = Sha256::new();
+    loop {
+        let chunk = stream.chunk().await?;
+        let Some(bytes) = chunk else { break };
+        hasher.update(&bytes);
+        file.write_all(&bytes).await?;
+        downloaded += bytes.len() as u64;
+        pb.set_position(downloaded);
+    }
+    file.flush().await?;
+    drop(file);
+    pb.finish_with_message(format!("{} complete", info.name));
+
+    if !info.sha256.is_empty() {
+        let actual = format!("{:x}", hasher.finalize());
+        if actual != info.sha256 {
+            tokio::fs::remove_file(&tmp).await.ok();
+            anyhow::bail!(
+                "checksum mismatch: expected {}, got {}",
+                info.sha256,
+                actual
+            );
+        }
+        tracing::info!(model_id = info.id, "checksum ok");
+    }
+
+    tokio::fs::rename(&tmp, &dest).await?;
+    println!("Model saved to {}", dest.display());
+    Ok(())
 }
 
 /// Lists all `.onnx` and `.gguf` files present in `models_dir`.
