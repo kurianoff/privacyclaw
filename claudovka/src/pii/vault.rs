@@ -226,7 +226,13 @@ impl PiiVault {
     }
 
     /// Replace all original PII values with their synthetic equivalents.
-    /// Used on the outbound (request) path.
+    ///
+    /// Intended for an outbound (request) path that performs vault-driven replacement
+    /// without calling the PII pipeline tiers (e.g. a hypothetical "vault-only" mode
+    /// where mappings from a previous session are reused directly).  In the current
+    /// T3 standalone path the SLM sidecar already returns rewritten text, so this
+    /// method is not called there — the vault is populated via `add_mapping` for the
+    /// inbound reverse pass only.
     #[allow(dead_code)]
     pub fn replace_originals(&self, text: &str) -> String {
         if self.original_to_synthetic.is_empty() {
@@ -365,7 +371,6 @@ struct VaultEntry {
 /// Singleton registry of active vaults keyed by conversation_id.
 pub struct VaultRegistry {
     vaults: Mutex<HashMap<String, VaultEntry>>,
-    #[allow(dead_code)]
     ttl: Duration,
 }
 
@@ -404,11 +409,15 @@ impl VaultRegistry {
             }
         }
 
-        // Cache miss — load from storage or create fresh.
+        // Cache miss — load from storage or create fresh (outside the lock).
         let vault = Self::load_or_create(conv_id, store);
-
         let handle = Arc::new(RwLock::new(vault));
+        // Double-check: another caller may have won the race while we loaded.
         let mut map = self.vaults.lock().unwrap();
+        if let Some(entry) = map.get_mut(conv_id) {
+            entry.last_accessed = Instant::now();
+            return Arc::clone(&entry.handle);
+        }
         map.insert(conv_id.to_string(), VaultEntry {
             handle: Arc::clone(&handle),
             last_accessed: Instant::now(),
@@ -444,8 +453,51 @@ impl VaultRegistry {
         }
     }
 
+    /// Move all mappings from the `from_key` vault into the `into_key` vault and
+    /// remove `from_key` from the registry.
+    ///
+    /// If `into_key` doesn't exist yet, the `from_key` entry is simply re-keyed.
+    /// If `from_key` doesn't exist this is a no-op.
+    /// Used when a session_uuid fallback vault needs to be merged into the real conv_id
+    /// vault once the conversation ID becomes known on a later turn.
+    pub fn merge_into(&self, from_key: &str, into_key: &str, store: &Store) {
+        let mut map = self.vaults.lock().unwrap();
+        let from_entry = match map.remove(from_key) {
+            Some(e) => e,
+            None => return, // nothing to merge
+        };
+        if let Some(into_entry) = map.get(&into_key.to_string()) {
+            // Both exist — drain from_key mappings into into_key vault.
+            let from_vault = from_entry.handle.read().unwrap();
+            let mut into_vault = into_entry.handle.write().unwrap();
+            for (orig, syn, label, tier, conf) in from_vault.quints() {
+                if into_vault.original_to_synthetic.contains_key(orig) {
+                    continue;
+                }
+                into_vault.insert_mapping_raw(
+                    orig.to_string(),
+                    syn.to_string(),
+                    label.to_string(),
+                    tier,
+                    conf,
+                );
+            }
+            if !from_vault.is_empty() {
+                into_vault.rebuild_automaton();
+                tracing::info!(from_key = %from_key, into_key = %into_key, "vault: merged session_uuid vault into real conv_id vault");
+            }
+        } else {
+            // into_key doesn't exist yet — just re-key the entry.
+            let _ = Self::load_or_create(into_key, store); // ensure storage is checked
+            map.insert(into_key.to_string(), VaultEntry {
+                handle: from_entry.handle,
+                last_accessed: Instant::now(),
+            });
+            tracing::info!(from_key = %from_key, into_key = %into_key, "vault: re-keyed session_uuid vault to real conv_id");
+        }
+    }
+
     /// Remove vaults that have not been accessed within the TTL.
-    #[allow(dead_code)]
     pub fn evict_expired(&self) {
         let ttl = self.ttl;
         let mut map = self.vaults.lock().unwrap();

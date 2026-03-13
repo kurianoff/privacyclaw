@@ -24,6 +24,34 @@ use crate::pii::{PiiCtx, PiiContext, PiiMode, PiiPipeline};
 use crate::pii::vault::VaultRegistry;
 use std::time::Duration;
 
+const VAULT_EVICT_INTERVAL: Duration = Duration::from_secs(60);
+
+/// Build a `PiiCtx` from config and CLI flag, or return `None` when PII is off.
+fn build_pii_ctx(cfg: &Config, pii_flag: bool) -> PiiCtx {
+    let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
+        PiiMode::Replace
+    } else if cfg.pii.mode == "detect-only" {
+        PiiMode::DetectOnly
+    } else {
+        PiiMode::Off
+    };
+
+    if pii_mode == PiiMode::Off {
+        return None;
+    }
+
+    let ttl = Duration::from_secs(cfg.pii.vault_ttl_hours * 3600);
+    let locale = crate::pii::locale::Locale::from_str_opt(&cfg.pii.locale)
+        .unwrap_or_default();
+    Some(Arc::new(PiiContext {
+        pipeline: PiiPipeline::new(&cfg.pii),
+        registry: Arc::new(VaultRegistry::new(ttl)),
+        locale,
+        mode: pii_mode,
+    }))
+}
+
+
 #[derive(Parser)]
 #[command(name = "claudovka", about = "Local MITM privacy proxy for LLM API traffic", version)]
 struct Cli {
@@ -409,27 +437,14 @@ async fn cmd_start(
     let cert_cache = ca::cert_gen::CertCache::new(bundle);
     tracing::info!("cert cache initialised");
 
-    let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
-        PiiMode::Replace
-    } else if cfg.pii.mode == "detect-only" {
-        PiiMode::DetectOnly
-    } else {
-        PiiMode::Off
-    };
-
-    let pii: PiiCtx = if pii_mode != PiiMode::Off {
-        let ttl = Duration::from_secs(cfg.pii.vault_ttl_hours * 3600);
-        let locale = crate::pii::locale::Locale::from_str_opt(&cfg.pii.locale)
-            .unwrap_or_default();
-        Some(Arc::new(PiiContext {
-            pipeline: PiiPipeline::new(&cfg.pii),
-            registry: Arc::new(VaultRegistry::new(ttl)),
-            locale,
-            mode: pii_mode,
-        }))
-    } else {
-        None
-    };
+    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
+    if let Some(ref p) = pii {
+        let registry = Arc::clone(&p.registry);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
+            loop { interval.tick().await; registry.evict_expired(); }
+        });
+    }
 
     let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);
@@ -516,27 +531,14 @@ async fn cmd_network_start(cfg: Config, cfg_mgr: Arc<ConfigManager>, pii_flag: b
     let cert_cache = ca::cert_gen::CertCache::new(bundle);
     tracing::info!("cert cache initialised");
 
-    let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
-        PiiMode::Replace
-    } else if cfg.pii.mode == "detect-only" {
-        PiiMode::DetectOnly
-    } else {
-        PiiMode::Off
-    };
-
-    let pii: PiiCtx = if pii_mode != PiiMode::Off {
-        let ttl = Duration::from_secs(cfg.pii.vault_ttl_hours * 3600);
-        let locale = crate::pii::locale::Locale::from_str_opt(&cfg.pii.locale)
-            .unwrap_or_default();
-        Some(Arc::new(PiiContext {
-            pipeline: PiiPipeline::new(&cfg.pii),
-            registry: Arc::new(VaultRegistry::new(ttl)),
-            locale,
-            mode: pii_mode,
-        }))
-    } else {
-        None
-    };
+    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
+    if let Some(ref p) = pii {
+        let registry = Arc::clone(&p.registry);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
+            loop { interval.tick().await; registry.evict_expired(); }
+        });
+    }
 
     let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);

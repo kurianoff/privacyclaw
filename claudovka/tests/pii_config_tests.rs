@@ -326,3 +326,29 @@ async fn model_activation_updates_slm_model_id_in_config() {
         "pii.slm.model_id must be updated after activation patch"
     );
 }
+
+// ── §12d.3 – T3 standalone config path ───────────────────────────────────────
+
+/// §12d.3: ConfigManager with pii.mode=replace, tiers.regex=false, tiers.ner=false,
+/// tiers.slm=true validates the T3 standalone config path via the patch() code path.
+#[tokio::test]
+async fn t3_standalone_config_path() {
+    use claudovka::config::{Config, ConfigManager, is_t3_standalone};
+
+    let mgr = ConfigManager::new(Config::default(), None);
+
+    let result = mgr.patch(serde_json::json!({
+        "pii": { "tiers": { "slm": true, "regex": false, "ner": false } }
+    })).await;
+    assert!(result.is_ok(), "patch must accept T3 standalone tier combination: {:?}", result);
+
+    let loaded = mgr.get().await;
+    assert!(
+        loaded.pii.tiers.slm,
+        "pii.tiers.slm must be true after patch"
+    );
+    assert!(
+        is_t3_standalone(&loaded.pii.tiers),
+        "is_t3_standalone must return true for slm=true, regex=false, ner=false"
+    );
+}

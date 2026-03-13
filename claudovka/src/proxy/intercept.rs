@@ -20,19 +20,14 @@ const READ_BUF: usize = 65536;
 #[cfg(not(test))]
 const BACKOFF_ATTEMPTS: usize = 5;
 /// Extended in test builds: saturated Tokio runtimes under parallel execution
-/// need up to 500 ms for spawn_blocking (DB lookup) to complete. Follows the
-/// same #[cfg(test)] pattern as UPSTREAM_READ_TIMEOUT above.
+/// need up to 500 ms for spawn_blocking (DB lookup) to complete.
 #[cfg(test)]
 const BACKOFF_ATTEMPTS: usize = 50;
 /// Sleep duration between each backoff retry (total wait: BACKOFF_ATTEMPTS × this).
 const BACKOFF_SLEEP_MS: u64 = 10;
 
 /// How long u_to_c waits for any upstream data before giving up.
-#[cfg(not(test))]
 const UPSTREAM_READ_TIMEOUT: Duration = Duration::from_secs(120);
-/// Shortened to 2 s in test builds so the idle-timeout test completes quickly.
-#[cfg(test)]
-const UPSTREAM_READ_TIMEOUT: Duration = Duration::from_millis(2000);
 /// How long c_to_u waits for a single write to upstream to complete.
 const UPSTREAM_WRITE_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -55,6 +50,9 @@ pub async fn run(
     tracing::warn!(host = %host, provider = provider.as_str(), "intercept: session started");
 
     let shared_conv_id: Arc<Mutex<Option<String>>> = Arc::new(Mutex::new(None));
+    // Pre-seeded session UUID used as fallback in the PII path when
+    // create_or_find_conversation returns None (parse failure or DB error).
+    let session_uuid = new_uuid();
     // Vault handle populated by c_to_u after PII pipeline runs; read by u_to_c.
     let shared_vault: Arc<Mutex<Option<VaultHandle>>> = Arc::new(Mutex::new(None));
     // Set by u_to_c when the upstream connection closes (EOF or Connection: close).
@@ -70,10 +68,11 @@ pub async fn run(
         let shared_vault = Arc::clone(&shared_vault);
         let upstream_gone = Arc::clone(&upstream_gone);
         let pii = pii.clone();
+        let session_uuid = session_uuid.clone();
         async move {
             let result = handle_c2u(
                 client_reader, upstream_writer, provider,
-                store, ws_tx, host, shared_conv_id, shared_vault, upstream_gone, pii,
+                store, ws_tx, host, shared_conv_id, shared_vault, upstream_gone, pii, session_uuid,
             ).await;
             let _ = shutdown_tx.send(());
             if let Err(e) = result { tracing::debug!(err = %e, "c→u closed"); }
@@ -107,13 +106,14 @@ async fn handle_c2u(
     shared_vault: Arc<Mutex<Option<VaultHandle>>>,
     upstream_gone: Arc<AtomicBool>,
     pii: PiiCtx,
+    session_uuid: String,
 ) -> Result<()> {
     let pii_active = pii.as_ref()
         .map(|p| p.mode != PiiMode::Off)
         .unwrap_or(false);
 
     if pii_active {
-        handle_c2u_pii(reader, writer, provider, store, ws_tx, host, shared_conv_id, shared_vault, upstream_gone, pii).await
+        handle_c2u_pii(reader, writer, provider, store, ws_tx, host, shared_conv_id, shared_vault, upstream_gone, pii, session_uuid).await
     } else {
         handle_c2u_passthrough(reader, writer, provider, store, ws_tx, host, shared_conv_id).await
     }
@@ -266,6 +266,7 @@ async fn handle_c2u_pii(
     shared_vault: Arc<Mutex<Option<VaultHandle>>>,
     upstream_gone: Arc<AtomicBool>,
     pii: PiiCtx,
+    session_uuid: String,
 ) -> Result<()> {
     let mut buf = vec![0u8; READ_BUF];
     let mut raw: Vec<u8> = Vec::new();
@@ -324,9 +325,20 @@ async fn handle_c2u_pii(
         ).await;
 
         // Get or create vault keyed by conversation_id.
+        // If conversation lookup failed, fall back to the session UUID so that all
+        // turns within this connection share the same vault (stable across retries).
         let pii_cid = conv_id_opt.clone().or_else(|| {
-            pii.as_ref().map(|_| shared_conv_id.lock().unwrap().clone().unwrap_or_else(new_uuid))
+            pii.as_ref().map(|_| shared_conv_id.lock().unwrap().clone().unwrap_or_else(|| session_uuid.clone()))
         });
+
+        // When the real conv_id becomes known on a later turn, merge any mappings
+        // that were stored under the session_uuid fallback vault into the real vault.
+        if let (Some(ref real_cid), Some(ref pii_ctx)) = (&conv_id_opt, &pii) {
+            if real_cid != &session_uuid {
+                pii_ctx.registry.merge_into(&session_uuid, real_cid, &store);
+            }
+        }
+
         let vault_handle = if let (Some(ref pii_ctx), Some(ref cid)) = (&pii, &pii_cid) {
             Some(pii_ctx.registry.get_or_create_with_store(cid, &store))
         } else {
@@ -1150,22 +1162,30 @@ async fn finalize_response(
 
     // Persist vault after stream completion.
     if pii_replace {
-        if let Some(vh) = shared_vault.lock().unwrap().clone() {
-            let vault = vh.read().unwrap();
-            if !vault.is_empty() {
-                let records: Vec<(String, String, String, u8, f32)> = vault
-                    .quints()
-                    .map(|(o, s, t, tier, conf)| (o.to_string(), s.to_string(), t.to_string(), tier, conf))
-                    .collect();
-                let seed = vault.rng_seed;
-                drop(vault);
+        let vh_opt = shared_vault.lock().unwrap().clone();
+        if let Some(vh) = vh_opt {
+            let vault_data = {
+                let vault = vh.read().unwrap();
+                if vault.is_empty() {
+                    None
+                } else {
+                    let records: Vec<(String, String, String, u8, f32)> = vault
+                        .quints()
+                        .map(|(o, s, t, tier, conf)| (o.to_string(), s.to_string(), t.to_string(), tier, conf))
+                        .collect();
+                    Some((vault.rng_seed, records))
+                }
+            };
+            if let Some((seed, records)) = vault_data {
                 let store_clone = store.clone();
                 let cid_clone = cid.clone();
-                std::mem::drop(tokio::task::spawn_blocking(move || {
+                if let Err(e) = tokio::task::spawn_blocking(move || {
                     if let Err(e) = store_clone.save_vault(&cid_clone, seed, &records) {
                         tracing::warn!("Failed to save vault: {}", e);
                     }
-                }));
+                }).await {
+                    tracing::warn!("save_vault task panicked: {}", e);
+                }
             }
         }
     }
@@ -2115,10 +2135,7 @@ mod tests {
 
     /// 2.4.4: When the upstream server sends nothing for longer than
     /// UPSTREAM_READ_TIMEOUT, u2c exits cleanly and the proxy shuts down.
-    ///
-    /// In test builds UPSTREAM_READ_TIMEOUT is 2 s; the test sleeps 2.1 s so
-    /// the timeout fires before we release the client connection.
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn test_upstream_idle_timeout_fires() {
         let (store, _dir) = temp_store();
         let (ws_tx, _) = broadcast::channel::<WsEvent>(64);
@@ -2141,14 +2158,20 @@ mod tests {
             "api.anthropic.com".to_string(), store, ws_tx, no_pii(),
         ));
 
-        // Sleep past the test-mode idle timeout (2 s + 100 ms slack).
-        tokio::time::sleep(UPSTREAM_READ_TIMEOUT + Duration::from_millis(100)).await;
+        // Yield to allow the proxy task to poll and register its timeout future
+        // before we advance the mock clock.
+        tokio::task::yield_now().await;
+
+        // Advance time past the idle timeout.
+        tokio::time::advance(UPSTREAM_READ_TIMEOUT + Duration::from_millis(100)).await;
 
         // Signal client EOF so c2u can exit after u2c has already timed out.
         drop(client_writer);
 
-        // Proxy must complete cleanly within a short grace window.
-        tokio::time::timeout(Duration::from_millis(500), proxy)
+        // Use a generous mock-time guard (200 s in the future) so the guard itself
+        // won't fire immediately on the already-advanced clock.  The proxy should
+        // complete quickly once the idle timeout fires.
+        tokio::time::timeout(Duration::from_secs(200), proxy)
             .await
             .expect("proxy hung after upstream idle timeout")
             .expect("proxy task panicked")

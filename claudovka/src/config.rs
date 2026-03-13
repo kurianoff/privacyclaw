@@ -422,7 +422,7 @@ fn validate_pii_tiers(tiers: &PiiTiersConfig) -> anyhow::Result<()> {
 
 /// Returns `true` when Tier 3 standalone mode is active: SLM enabled with
 /// both Tier 1 (regex) and Tier 2 (NER) disabled.
-pub(crate) fn is_t3_standalone(tiers: &PiiTiersConfig) -> bool {
+pub fn is_t3_standalone(tiers: &PiiTiersConfig) -> bool {
     tiers.slm && !tiers.regex && !tiers.ner
 }
 

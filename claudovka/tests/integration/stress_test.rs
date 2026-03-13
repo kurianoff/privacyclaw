@@ -668,9 +668,9 @@ async fn stress_tier1_email_phone_concurrency() {
 // S4 — Tier 1 PII, sessions with high-density PII (4 types) + medium filler
 //
 // Note: concurrency is limited to 5 (not 10 from the design) because the test
-// binary is unoptimized and the 2-second UPSTREAM_READ_TIMEOUT in intercept.rs
-// fires under heavy concurrent load with large payloads.  5 concurrent sessions
-// still exercises the multi-session vault isolation and high-density PII path.
+// binary is unoptimized and may struggle under heavy concurrent load with large
+// payloads.  5 concurrent sessions still exercises the multi-session vault
+// isolation and high-density PII path.
 // ═══════════════════════════════════════════════════════════════════════════════
 
 #[tokio::test]
