@@ -15,6 +15,8 @@ class Claudovka < Formula
     end
   end
 
+  depends_on "llama.cpp"
+
   def install
     bin.install "claudovka"
   end
@@ -35,14 +37,23 @@ class Claudovka < Formula
 
   def caveats
     <<~EOS
-      To initialize the CA certificate:
+      ── First-time setup ──────────────────────────────────────────
+      Generate and trust the local CA certificate:
         claudovka init
-        claudovka init --install-ca   # trust in macOS keychain
+        claudovka init --install-ca   # adds to macOS keychain
 
-      To enable Tier 3 standalone PII protection, create:
-        ~/Library/Application Support/claudovka/config.toml
+      ── Tier 3 standalone PII protection ──────────────────────────
+      llama-server (llama.cpp) is included with this install.
+      You only need a GGUF model file. Recommended:
+        Phi-3-mini-4k-instruct.Q4_K_M.gguf  (~2.2 GB, fast)
+        Mistral-7B-Instruct-v0.3.Q4_K_M.gguf (~4.1 GB, more accurate)
 
-      with contents:
+      Download from https://huggingface.co or use:
+        brew install huggingface-cli
+        huggingface-cli download microsoft/Phi-3-mini-4k-instruct-gguf \
+          Phi-3-mini-4k-instruct-q4.gguf --local-dir ~/Library/Application\ Support/claudovka/models/
+
+      Then create ~/Library/Application Support/claudovka/config.toml:
         [pii]
         mode = "replace"
 
@@ -55,13 +66,19 @@ class Claudovka < Formula
         endpoint   = "http://127.0.0.1:16442"
         timeout_ms = 5000
 
-      T3 standalone requires a running llama-server (llama.cpp) on port 16442:
-        llama-server --model /path/to/model.gguf --port 16442 --ctx-size 2048
+      Start the SLM sidecar:
+        llama-server --model ~/Library/Application\ Support/claudovka/models/Phi-3-mini-4k-instruct-q4.gguf \
+          --port 16442 --ctx-size 2048
 
-      Then start the proxy:
+      Start the proxy:
         claudovka start
         # or as a background service:
         brew services start #{name}
+
+      Point your LLM tool at the proxy:
+        export HTTPS_PROXY=http://127.0.0.1:16440
+        export HTTP_PROXY=http://127.0.0.1:16440
+        export NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/claudovka/ca/ca.pem"
     EOS
   end
 

@@ -31,8 +31,8 @@ class Claudovka < Formula
   end
 
   # ── Dependencies ──────────────────────────────────────────────────────────
-  # claudovka is a self-contained binary (OpenSSL / TLS via rustls + ring).
-  # No runtime dependencies are required.
+  # llama.cpp provides llama-server for Tier 3 standalone PII protection.
+  depends_on "llama.cpp"
 
   # ── Install ───────────────────────────────────────────────────────────────
 
