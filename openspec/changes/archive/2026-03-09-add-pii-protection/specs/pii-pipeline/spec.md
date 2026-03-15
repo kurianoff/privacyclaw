@@ -197,22 +197,22 @@ The system SHALL support configurable locale packs that extend Tier 1 detection 
 
 ### Requirement: test-pii CLI Command
 
-The system SHALL provide a `claudovka test-pii` command that runs the detection pipeline on user-supplied text and prints a human-readable table of all detected entities, their type, tier, confidence, and proposed synthetic replacement.
+The system SHALL provide a `privacyclaw test-pii` command that runs the detection pipeline on user-supplied text and prints a human-readable table of all detected entities, their type, tier, confidence, and proposed synthetic replacement.
 
 #### Scenario: Structured PII detected
 
-- **WHEN** the user runs `claudovka test-pii "My email is john@acme.com, SSN 123-45-6789"`
+- **WHEN** the user runs `privacyclaw test-pii "My email is john@acme.com, SSN 123-45-6789"`
 - **THEN** the output lists:
   - `[EMAIL] "john@acme.com" → "alice.brown@example.com" (Tier 1)`
   - `[SSN] "123-45-6789" → "987-65-4321" (Tier 1)`
 
 #### Scenario: No PII detected
 
-- **WHEN** the user runs `claudovka test-pii "Hello, how are you?"`
+- **WHEN** the user runs `privacyclaw test-pii "Hello, how are you?"`
 - **THEN** the output states `No PII detected`
 - **AND** the exit code is 0
 
 #### Scenario: Locale-specific detection
 
-- **WHEN** the user runs `claudovka test-pii --locale in-IN "My Aadhaar is 1234 5678 9012"`
+- **WHEN** the user runs `privacyclaw test-pii --locale in-IN "My Aadhaar is 1234 5678 9012"`
 - **THEN** the Aadhaar number is detected and displayed

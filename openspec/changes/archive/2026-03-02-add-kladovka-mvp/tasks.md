@@ -1,4 +1,4 @@
-# Tasks: add-kladovka-mvp
+# Tasks: add-privacyclaw-mvp
 
 ## 1. Project Scaffold
 

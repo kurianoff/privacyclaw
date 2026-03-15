@@ -100,7 +100,7 @@ Test that `ReplacementBuffer` with a vault containing one email synthetic AND a 
 ### 5.1 `cargo build` — must succeed with no errors
 ### 5.2 `cargo clippy -- -D warnings` — must produce no warnings
 ### 5.3 `cargo test` — all tests must pass
-### 5.4 `cargo test -p claudovka -- pii` — run only PII-related tests, confirm all pass
+### 5.4 `cargo test -p privacyclaw -- pii` — run only PII-related tests, confirm all pass
 
 ---
 

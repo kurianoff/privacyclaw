@@ -1,5 +1,9 @@
 # Rust build artifacts
-claudovka/target/
+target/
+
+# Claude local settings (machine-specific)
+.claude/settings.json
+.claude/settings.local.json
 
 # Editor
 .DS_Store
@@ -14,10 +18,10 @@ ca.pem
 *.env
 
 # Build distribution artifacts
-claudovka/dist/
-
-# Scratch / local files
-*.png
+dist/
 
 # External repos (managed separately)
 mitmproxy/
+
+# Stale pre-move subdirectory (no longer used)
+privacyclaw/

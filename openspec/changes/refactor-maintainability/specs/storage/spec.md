@@ -47,7 +47,7 @@ The `Store` implementation SHALL maintain an in-memory cache (`conv_cache: Arc<R
 - `pii.ner.timeout_ms` or `pii.slm.timeout_ms` is zero
 - `storage.logs_dir` is an empty string
 
-Invalid configurations SHALL cause `claudovka start` and `claudovka network-start` to exit with a descriptive error before binding any ports.
+Invalid configurations SHALL cause `privacyclaw start` and `privacyclaw network-start` to exit with a descriptive error before binding any ports.
 
 #### Scenario: Valid config loads successfully
 
@@ -58,7 +58,7 @@ Invalid configurations SHALL cause `claudovka start` and `claudovka network-star
 
 - **WHEN** `proxy.listen` is set to `"not-an-address"` in the config file
 - **THEN** `Config::load()` returns `Err(…)` with a message identifying the invalid field
-- **AND** `claudovka start` exits with a non-zero status before binding any port
+- **AND** `privacyclaw start` exits with a non-zero status before binding any port
 
 #### Scenario: Zero timeout rejected at startup
 

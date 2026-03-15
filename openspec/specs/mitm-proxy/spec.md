@@ -1,7 +1,7 @@
 # mitm-proxy Specification
 
 ## Purpose
-TBD - created by archiving change add-kladovka-mvp. Update Purpose after archive.
+TBD - created by archiving change add-privacyclaw-mvp. Update Purpose after archive.
 ## Requirements
 ### Requirement: HTTP CONNECT Proxy Listener
 
@@ -129,7 +129,7 @@ The proxy SHALL accept a `VaultRegistry` and `PiiConfig` reference at initializa
 
 #### Scenario: VaultRegistry constructed at startup
 
-- **WHEN** `claudovka start` is invoked with `pii.mode != "off"`
+- **WHEN** `privacyclaw start` is invoked with `pii.mode != "off"`
 - **THEN** a `VaultRegistry` is constructed and passed to both `proxy::run` and `proxy::network::run`
 
 #### Scenario: VaultRegistry not constructed when PII is off

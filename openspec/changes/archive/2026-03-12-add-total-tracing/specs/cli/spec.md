@@ -6,20 +6,20 @@ The binary SHALL accept a `--log-file <PATH>` global flag on all subcommands. Wh
 
 #### Scenario: Log file path set via flag
 
-- **WHEN** the user runs `claudovka start --log-file /tmp/claudovka-debug.log`
-- **THEN** log records are written to `/tmp/claudovka-debug.log` in addition to stderr
+- **WHEN** the user runs `privacyclaw start --log-file /tmp/privacyclaw-debug.log`
+- **THEN** log records are written to `/tmp/privacyclaw-debug.log` in addition to stderr
 - **AND** the file is created if it does not exist (the parent directory must already exist)
 - **AND** the `[logging].file` value in `config.toml` is ignored for this invocation
 
 #### Scenario: Flag absent — config file controls file output
 
-- **WHEN** the user runs `claudovka start` without `--log-file`
+- **WHEN** the user runs `privacyclaw start` without `--log-file`
 - **THEN** file output is controlled entirely by `[logging].file` in the config
 - **AND** if `[logging].file` is absent, no log file is written
 
 #### Scenario: Flag works with all subcommands
 
-- **WHEN** the user runs `claudovka test-pii --log-file /tmp/out.log "test text"`
+- **WHEN** the user runs `privacyclaw test-pii --log-file /tmp/out.log "test text"`
 - **THEN** the PII detection log records (TRACE through INFO) are written to `/tmp/out.log`
 - **AND** the `test-pii` command still prints its human-readable table to stdout as usual
 
@@ -48,5 +48,5 @@ The system SHALL use the `tracing` crate for structured logging with a configura
 
 #### Scenario: RUST_LOG env var takes precedence
 
-- **WHEN** `RUST_LOG=claudovka=trace` is set in the environment
+- **WHEN** `RUST_LOG=privacyclaw=trace` is set in the environment
 - **THEN** the effective log level is TRACE regardless of `[logging].level` in the config

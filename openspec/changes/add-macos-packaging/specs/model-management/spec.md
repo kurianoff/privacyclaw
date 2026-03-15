@@ -73,7 +73,7 @@ The system SHALL report disk usage for downloaded models and allow deleting a mo
 
 - **WHEN** a DELETE request is made to `/api/models/:id`
 - **AND** the model is not the currently active model
-- **THEN** the GGUF file is deleted from `~/.config/claudovka/models/`
+- **THEN** the GGUF file is deleted from `~/.config/privacyclaw/models/`
 - **AND** the catalog entry is updated to `downloaded: false`
 
 #### Scenario: Delete active model rejected

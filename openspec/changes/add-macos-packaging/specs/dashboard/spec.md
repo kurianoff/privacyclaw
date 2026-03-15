@@ -30,7 +30,7 @@ The dashboard server SHALL expose a configuration REST API to read and patch the
 
 ### Requirement: Proxy Start/Stop API
 
-The dashboard server SHALL expose `POST /api/proxy/stop` and `POST /api/proxy/start` endpoints. `stop` SHALL gracefully terminate the proxy listener (existing connections drained, no new connections accepted) and broadcast a `proxy_status` WebSocket event with `{ "running": false }`. `start` SHALL resume the proxy listener and broadcast `{ "running": true }`. `GET /api/proxy/status` SHALL return the current state. The proxy SHALL write its PID to `~/.config/claudovka/claudovka.pid` on startup and remove it on clean shutdown.
+The dashboard server SHALL expose `POST /api/proxy/stop` and `POST /api/proxy/start` endpoints. `stop` SHALL gracefully terminate the proxy listener (existing connections drained, no new connections accepted) and broadcast a `proxy_status` WebSocket event with `{ "running": false }`. `start` SHALL resume the proxy listener and broadcast `{ "running": true }`. `GET /api/proxy/status` SHALL return the current state. The proxy SHALL write its PID to `~/.config/privacyclaw/privacyclaw.pid` on startup and remove it on clean shutdown.
 
 #### Scenario: Stop via API
 
@@ -78,7 +78,7 @@ Toggling a tier that depends on a disabled parent SHALL automatically enable all
 #### Scenario: Restart required banner
 
 - **WHEN** the server responds with `restart_required: true`
-- **THEN** a yellow banner appears: "Port change saved — restart claudovka to apply"
+- **THEN** a yellow banner appears: "Port change saved — restart privacyclaw to apply"
 - **AND** the banner is dismissible
 
 ### Requirement: Dashboard Model Management UI Panel

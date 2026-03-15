@@ -3,7 +3,7 @@ name: developer
 description: Use when you need to implement a feature, fix a bug, or make code changes in this Rust project. Ideal for "implement X", "add Y to Z", or "make this code change". Reads the relevant specs and design docs, follows the project's coding conventions, implements the minimum code required to satisfy the requirements, and does not over-engineer.
 ---
 
-You are a senior Rust engineer working on claudovka — a privacy proxy for AI agent traffic. Your job is to implement exactly what was specified, nothing more.
+You are a senior Rust engineer working on privacyclaw — a privacy proxy for AI agent traffic. Your job is to implement exactly what was specified, nothing more.
 
 ## Project conventions (non-negotiable)
 
@@ -30,7 +30,7 @@ You are a senior Rust engineer working on claudovka — a privacy proxy for AI a
 ## Critical architecture constraints
 
 - **rcgen 0.13**: No `from_ca_cert_pem`. Reconstruct CA cert from key PEM + hardcoded DN params.
-- **DN must match exactly**: `"Claudovka Privacy Proxy"` / `"Claudovka Root CA"` in both `ca/mod.rs` and `cert_gen.rs`.
+- **DN must match exactly**: `"Privacyclaw Privacy Proxy"` / `"Privacyclaw Root CA"` in both `ca/mod.rs` and `cert_gen.rs`.
 - **rustls 0.23**: Use `rustls::crypto::ring::sign::any_supported_type` (not `rustls::sign::...`).
 - **CryptoProvider**: `rustls::crypto::ring::default_provider().install_default().ok()` in `main()` before any TLS.
 - **CertifiedKey in ServerConfig**: Use `with_cert_resolver(Arc::new(resolver))` not `with_single_cert`.

@@ -6,33 +6,33 @@ The binary SHALL expose the following subcommands via clap: `init`, `start`, `ca
 
 #### Scenario: init subcommand
 
-- **WHEN** the user runs `kladovka init`
+- **WHEN** the user runs `privacyclaw init`
 - **THEN** CA certificate generation is performed and setup instructions are printed
 
 #### Scenario: start subcommand
 
-- **WHEN** the user runs `kladovka start`
+- **WHEN** the user runs `privacyclaw start`
 - **THEN** the MITM proxy and dashboard server start and listen on configured addresses
 - **AND** startup information is printed including proxy address, dashboard URL, and intercepted domains
 
 #### Scenario: ca-path subcommand
 
-- **WHEN** the user runs `kladovka ca-path`
+- **WHEN** the user runs `privacyclaw ca-path`
 - **THEN** the absolute path to the CA certificate file is printed to stdout
 
 #### Scenario: reset-ca subcommand
 
-- **WHEN** the user runs `kladovka reset-ca`
+- **WHEN** the user runs `privacyclaw reset-ca`
 - **THEN** the existing CA is deleted and a new one is generated
 
 #### Scenario: export subcommand
 
-- **WHEN** the user runs `kladovka export --format json --output file.json`
+- **WHEN** the user runs `privacyclaw export --format json --output file.json`
 - **THEN** all conversations and messages are exported to the specified file in JSON format
 
 ### Requirement: Configuration File
 
-The system SHALL load configuration from a TOML file at a platform-appropriate path (`~/.config/kladovka/config.toml`) with sensible defaults when the file is absent.
+The system SHALL load configuration from a TOML file at a platform-appropriate path (`~/.config/privacyclaw/config.toml`) with sensible defaults when the file is absent.
 
 #### Scenario: Config loaded from file
 

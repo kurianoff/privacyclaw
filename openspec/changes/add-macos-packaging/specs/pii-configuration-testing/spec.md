@@ -165,19 +165,19 @@ The test suite SHALL verify Tier 3 sidecar lifecycle, model selection, and disam
 
 ### Requirement: Proxy Start/Stop Toggle Tests
 
-The test suite SHALL verify that starting and stopping the proxy — via CLI (`claudovka start` / `claudovka stop`) and via the dashboard UI / API — correctly affects the proxy's listening state, dashboard indicators, and log output.
+The test suite SHALL verify that starting and stopping the proxy — via CLI (`privacyclaw start` / `privacyclaw stop`) and via the dashboard UI / API — correctly affects the proxy's listening state, dashboard indicators, and log output.
 
-#### Scenario: `claudovka stop` terminates the proxy cleanly
+#### Scenario: `privacyclaw stop` terminates the proxy cleanly
 
-- **WHEN** the proxy is running and `claudovka stop` is executed
+- **WHEN** the proxy is running and `privacyclaw stop` is executed
 - **THEN** a SIGTERM is sent to the proxy process (located via PID file)
 - **AND** the process exits within 5 seconds
 - **AND** the PID file is removed
 - **AND** "Proxy stopped" is printed to stdout
 
-#### Scenario: `claudovka stop` when proxy is not running
+#### Scenario: `privacyclaw stop` when proxy is not running
 
-- **WHEN** `claudovka stop` is run and no PID file exists
+- **WHEN** `privacyclaw stop` is run and no PID file exists
 - **THEN** "Proxy is not running" is printed and the command exits with code 0
 
 #### Scenario: Dashboard stop button stops the proxy

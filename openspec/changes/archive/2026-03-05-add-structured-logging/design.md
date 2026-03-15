@@ -2,7 +2,7 @@
 
 ## Context
 
-Claudovka uses `tracing` (already a dependency) throughout the async proxy stack. The change adds instrumentation to all source files without changing runtime behavior. The design must address: async safety, data volume at DEBUG, sensitive data exposure, and consistent level semantics.
+Privacyclaw uses `tracing` (already a dependency) throughout the async proxy stack. The change adds instrumentation to all source files without changing runtime behavior. The design must address: async safety, data volume at DEBUG, sensitive data exposure, and consistent level semantics.
 
 ## Goals / Non-Goals
 

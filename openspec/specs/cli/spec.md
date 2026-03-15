@@ -1,7 +1,7 @@
 # cli Specification
 
 ## Purpose
-TBD - created by archiving change add-kladovka-mvp. Update Purpose after archive.
+TBD - created by archiving change add-privacyclaw-mvp. Update Purpose after archive.
 ## Requirements
 ### Requirement: CLI Subcommands
 
@@ -9,33 +9,33 @@ The binary SHALL expose the following subcommands via clap: `init`, `start`, `ca
 
 #### Scenario: init subcommand
 
-- **WHEN** the user runs `kladovka init`
+- **WHEN** the user runs `privacyclaw init`
 - **THEN** CA certificate generation is performed and setup instructions are printed
 
 #### Scenario: start subcommand
 
-- **WHEN** the user runs `kladovka start`
+- **WHEN** the user runs `privacyclaw start`
 - **THEN** the MITM proxy and dashboard server start and listen on configured addresses
 - **AND** startup information is printed including proxy address, dashboard URL, and intercepted domains
 
 #### Scenario: ca-path subcommand
 
-- **WHEN** the user runs `kladovka ca-path`
+- **WHEN** the user runs `privacyclaw ca-path`
 - **THEN** the absolute path to the CA certificate file is printed to stdout
 
 #### Scenario: reset-ca subcommand
 
-- **WHEN** the user runs `kladovka reset-ca`
+- **WHEN** the user runs `privacyclaw reset-ca`
 - **THEN** the existing CA is deleted and a new one is generated
 
 #### Scenario: export subcommand
 
-- **WHEN** the user runs `kladovka export --format json --output file.json`
+- **WHEN** the user runs `privacyclaw export --format json --output file.json`
 - **THEN** all conversations and messages are exported to the specified file in JSON format
 
 ### Requirement: Configuration File
 
-The system SHALL load configuration from a TOML file at a platform-appropriate path (`~/.config/kladovka/config.toml`) with sensible defaults when the file is absent.
+The system SHALL load configuration from a TOML file at a platform-appropriate path (`~/.config/privacyclaw/config.toml`) with sensible defaults when the file is absent.
 
 #### Scenario: Config loaded from file
 
@@ -69,16 +69,16 @@ The system SHALL use the `tracing` crate for structured logging with a configura
 
 #### Scenario: RUST_LOG env var takes precedence
 
-- **WHEN** `RUST_LOG=claudovka=trace` is set in the environment
+- **WHEN** `RUST_LOG=privacyclaw=trace` is set in the environment
 - **THEN** the effective log level is TRACE regardless of `[logging].level` in the config
 
 ### Requirement: test-pii Subcommand
 
-The `claudovka test-pii` subcommand SHALL run the configured PII detection tiers against user-supplied text and print all detected entities in a human-readable table. It SHALL not require the proxy to be running.
+The `privacyclaw test-pii` subcommand SHALL run the configured PII detection tiers against user-supplied text and print all detected entities in a human-readable table. It SHALL not require the proxy to be running.
 
 #### Scenario: Detections printed as table
 
-- **WHEN** the user runs `claudovka test-pii "My email is john@acme.com"`
+- **WHEN** the user runs `privacyclaw test-pii "My email is john@acme.com"`
 - **THEN** stdout contains a table with columns: Type, Original, Synthetic, Tier, Confidence
 - **AND** the row shows `EMAIL | john@acme.com | alice.brown@example.com | 1 | 1.0`
 
@@ -96,12 +96,12 @@ The `claudovka test-pii` subcommand SHALL run the configured PII detection tiers
 
 ### Requirement: models Subcommand
 
-The `claudovka models` subcommand SHALL manage the download and installation of optional ML model files required for Tier 2 (GLiNER ONNX) and Tier 3 (Anonymizer SLM GGUF). Models SHALL be stored in the configured `pii.ner.model_path` directory.
+The `privacyclaw models` subcommand SHALL manage the download and installation of optional ML model files required for Tier 2 (GLiNER ONNX) and Tier 3 (Anonymizer SLM GGUF). Models SHALL be stored in the configured `pii.ner.model_path` directory.
 
 #### Scenario: Install GLiNER model
 
-- **WHEN** the user runs `claudovka models install gliner-pii-base`
-- **THEN** the proxy downloads the ONNX model (~200MB) to `~/.config/claudovka/models/`
+- **WHEN** the user runs `privacyclaw models install gliner-pii-base`
+- **THEN** the proxy downloads the ONNX model (~200MB) to `~/.config/privacyclaw/models/`
 - **AND** prints a progress indicator during download
 - **AND** verifies the sha256 checksum after download
 
@@ -112,7 +112,7 @@ The `claudovka models` subcommand SHALL manage the download and installation of 
 
 #### Scenario: List installed models
 
-- **WHEN** the user runs `claudovka models list`
+- **WHEN** the user runs `privacyclaw models list`
 - **THEN** stdout lists all installed models with name, version, size, and path
 
 #### Scenario: Network error during download
@@ -126,43 +126,43 @@ The `claudovka models` subcommand SHALL manage the download and installation of 
 
 ### Requirement: benchmark Subcommand
 
-The `claudovka benchmark` subcommand SHALL run the PII detection pipeline against a local evaluation dataset and report precision, recall, and F1 per entity type.
+The `privacyclaw benchmark` subcommand SHALL run the PII detection pipeline against a local evaluation dataset and report precision, recall, and F1 per entity type.
 
 #### Scenario: Benchmark against local fixture
 
-- **WHEN** the user runs `claudovka benchmark`
+- **WHEN** the user runs `privacyclaw benchmark`
 - **THEN** the pipeline runs against bundled test fixtures
 - **AND** outputs a summary table of F1, precision, recall per entity type
 
 #### Scenario: Tier-specific benchmark
 
-- **WHEN** the user runs `claudovka benchmark --tier 1`
+- **WHEN** the user runs `privacyclaw benchmark --tier 1`
 - **THEN** only Tier 1 (regex) is evaluated
 
 #### Scenario: HTML report
 
-- **WHEN** the user runs `claudovka benchmark --report html`
+- **WHEN** the user runs `privacyclaw benchmark --report html`
 - **THEN** an HTML report is written to `./benchmark-report.html`
 
 ---
 
 ### Requirement: PII Override Flags on start and network-start
 
-The `claudovka start` and `claudovka network-start` subcommands SHALL accept optional `--pii` and `--pii-llm` flags that override the PII mode set in the configuration file.
+The `privacyclaw start` and `privacyclaw network-start` subcommands SHALL accept optional `--pii` and `--pii-llm` flags that override the PII mode set in the configuration file.
 
 #### Scenario: PII enabled via flag
 
-- **WHEN** the user runs `claudovka start --pii`
+- **WHEN** the user runs `privacyclaw start --pii`
 - **THEN** `pii.mode` is set to `"replace"` and Tiers 1+2 are active (equivalent to `pii.tiers.regex = true, pii.tiers.ner = true`)
 
 #### Scenario: PII with SLM sidecar
 
-- **WHEN** the user runs `claudovka start --pii --llm`
-- **THEN** Tier 3 is also enabled and `claudovka` attempts to start the llama-server sidecar process
+- **WHEN** the user runs `privacyclaw start --pii --llm`
+- **THEN** Tier 3 is also enabled and `privacyclaw` attempts to start the llama-server sidecar process
 
 #### Scenario: No flags — default behavior unchanged
 
-- **WHEN** the user runs `claudovka start` without `--pii`
+- **WHEN** the user runs `privacyclaw start` without `--pii`
 - **THEN** PII mode defaults to the config file value (default `"off"`)
 - **AND** behavior is identical to Phase 1
 
@@ -172,20 +172,20 @@ The binary SHALL accept a `--log-file <PATH>` global flag on all subcommands. Wh
 
 #### Scenario: Log file path set via flag
 
-- **WHEN** the user runs `claudovka start --log-file /tmp/claudovka-debug.log`
-- **THEN** log records are written to `/tmp/claudovka-debug.log` in addition to stderr
+- **WHEN** the user runs `privacyclaw start --log-file /tmp/privacyclaw-debug.log`
+- **THEN** log records are written to `/tmp/privacyclaw-debug.log` in addition to stderr
 - **AND** the file is created if it does not exist (the parent directory must already exist)
 - **AND** the `[logging].file` value in `config.toml` is ignored for this invocation
 
 #### Scenario: Flag absent — config file controls file output
 
-- **WHEN** the user runs `claudovka start` without `--log-file`
+- **WHEN** the user runs `privacyclaw start` without `--log-file`
 - **THEN** file output is controlled entirely by `[logging].file` in the config
 - **AND** if `[logging].file` is absent, no log file is written
 
 #### Scenario: Flag works with all subcommands
 
-- **WHEN** the user runs `claudovka test-pii --log-file /tmp/out.log "test text"`
+- **WHEN** the user runs `privacyclaw test-pii --log-file /tmp/out.log "test text"`
 - **THEN** the PII detection log records (TRACE through INFO) are written to `/tmp/out.log`
 - **AND** the `test-pii` command still prints its human-readable table to stdout as usual
 

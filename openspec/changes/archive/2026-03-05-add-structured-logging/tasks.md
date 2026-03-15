@@ -7,9 +7,9 @@
 
 ## 2. src/main.rs
 
-- [x] 2.1 WARN: `"Starting claudovka in CONNECT mode"` (before spawning proxy_task in cmd_start)
-- [x] 2.2 WARN: `"Starting claudovka in network mode"` (before spawning net_task in cmd_network_start)
-- [x] 2.3 WARN: `"Shutting down claudovka"` (in the ctrl_c handler of both cmd_start and cmd_network_start)
+- [x] 2.1 WARN: `"Starting privacyclaw in CONNECT mode"` (before spawning proxy_task in cmd_start)
+- [x] 2.2 WARN: `"Starting privacyclaw in network mode"` (before spawning net_task in cmd_network_start)
+- [x] 2.3 WARN: `"Shutting down privacyclaw"` (in the ctrl_c handler of both cmd_start and cmd_network_start)
 - [x] 2.4 INFO: `"Store opened"` with `logs_dir` field after Store::open in both cmd_start and cmd_network_start
 - [x] 2.5 INFO: `"Cert cache initialised"` after CertCache::new
 - [x] 2.6 WARN: `"Log rotation: deleted N file(s)"` — already exists at INFO; change to WARN
@@ -148,6 +148,6 @@
 - [x] 13.1 Run `cargo build` and fix all compilation errors
 - [x] 13.2 Run `cargo clippy -- -D warnings` and fix all warnings
 - [x] 13.3 Run `cargo test` and ensure all tests pass
-- [ ] 13.4 Manual smoke test: `cargo run -- start` with `RUST_LOG=claudovka=debug` and verify log output at each level
+- [ ] 13.4 Manual smoke test: `cargo run -- start` with `RUST_LOG=privacyclaw=debug` and verify log output at each level
 - [ ] 13.5 Manual smoke test: verify INFO output contains no DEBUG-only fields
 - [ ] 13.6 Manual smoke test: verify Authorization header value does not appear in DEBUG logs

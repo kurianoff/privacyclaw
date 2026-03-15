@@ -1,7 +1,7 @@
-# Stress Test Design: claudovka Privacy Proxy
+# Stress Test Design: privacyclaw Privacy Proxy
 
-**Target file**: `claudovka/tests/integration/stress_test.rs`
-**Entry point under test**: `claudovka::proxy::intercept::run()`
+**Target file**: `privacyclaw/tests/integration/stress_test.rs`
+**Entry point under test**: `privacyclaw::proxy::intercept::run()`
 **Transport**: in-memory `tokio::io::duplex()` — no TLS, no network
 **Parallelism**: `tokio::task::JoinSet`
 
@@ -33,12 +33,12 @@ Each row is one `#[tokio::test]` function. All tests run in the same file.
 ### 2.1 Shared imports and module declaration
 
 ```rust
-// claudovka/tests/integration/stress_test.rs
-use claudovka::dashboard::WsEvent;
-use claudovka::pii::{Locale, PiiContext, PiiMode, PiiPipeline};
-use claudovka::pii::vault::VaultRegistry;
-use claudovka::proxy::intercept;
-use claudovka::storage::Store;
+// privacyclaw/tests/integration/stress_test.rs
+use privacyclaw::dashboard::WsEvent;
+use privacyclaw::pii::{Locale, PiiContext, PiiMode, PiiPipeline};
+use privacyclaw::pii::vault::VaultRegistry;
+use privacyclaw::proxy::intercept;
+use privacyclaw::storage::Store;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::tempdir;
@@ -68,7 +68,7 @@ fn make_pii_ctx_tier1() -> Arc<PiiContext> {
 /// Build a PiiContext with Tier 1 + Tier 3 (mock SLM at given port).
 /// Tier 3 slm_confidence_threshold is set to 0.0 so all T1 spans are sent to SLM.
 fn make_pii_ctx_tier1_tier3(slm_port: u16) -> Arc<PiiContext> {
-    let mut cfg = claudovka::config::PiiConfig::default();
+    let mut cfg = privacyclaw::config::PiiConfig::default();
     cfg.tiers.slm = true;
     cfg.slm.endpoint = format!("http://127.0.0.1:{}", slm_port);
     cfg.slm.timeout_ms = 5000;
@@ -83,7 +83,7 @@ fn make_pii_ctx_tier1_tier3(slm_port: u16) -> Arc<PiiContext> {
 
 /// Build a PiiContext in T3 standalone mode (SLM only, no Tier 1/2).
 fn make_pii_ctx_t3_standalone(slm_port: u16) -> Arc<PiiContext> {
-    let mut cfg = claudovka::config::PiiConfig::default();
+    let mut cfg = privacyclaw::config::PiiConfig::default();
     cfg.tiers.regex = false;
     cfg.tiers.ner = false;
     cfg.tiers.slm = true;
@@ -265,7 +265,7 @@ fn anthropic_request_with_content(content: &str) -> Vec<u8> {
 
 Copy these verbatim from `pii_proxy_intercept_test.rs` (they are not exported) or move them to `tests/integration/helpers.rs` and use `mod helpers` in both files.
 
-**Recommended action**: extract the following four functions into `claudovka/tests/integration/helpers.rs` and `mod helpers;` in each integration test file:
+**Recommended action**: extract the following four functions into `privacyclaw/tests/integration/helpers.rs` and `mod helpers;` in each integration test file:
 
 - `read_full_response()` — reads until `0\r\n\r\n` (chunked SSE) or Content-Length satisfied
 - `read_forwarded_request_content()` — reads the proxy-forwarded request and extracts message content
@@ -756,7 +756,7 @@ Implementation detail for splitting: after extracting the synthetic from the mas
 ## 7. File Structure
 
 ```
-claudovka/tests/
+privacyclaw/tests/
   integration/
     helpers.rs                        -- shared helpers extracted from pii_proxy_intercept_test.rs
     pii_proxy_intercept_test.rs       -- existing (updated to use helpers.rs)

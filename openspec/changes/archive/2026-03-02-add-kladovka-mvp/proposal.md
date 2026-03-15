@@ -1,8 +1,8 @@
-# Change: Add Kladovka MVP — MITM LLM Traffic Inspector
+# Change: Add Privacyclaw MVP — MITM LLM Traffic Inspector
 
 ## Why
 
-Developers using AI coding agents have no visibility into what data is sent to commercial LLMs. Kladovka provides a local MITM proxy that intercepts, decrypts, and displays all LLM API traffic in a real-time dashboard — giving developers full observability over their AI interactions.
+Developers using AI coding agents have no visibility into what data is sent to commercial LLMs. Privacyclaw provides a local MITM proxy that intercepts, decrypts, and displays all LLM API traffic in a real-time dashboard — giving developers full observability over their AI interactions.
 
 ## What Changes
 
