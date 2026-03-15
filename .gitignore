@@ -1,6 +1,10 @@
 # Rust build artifacts
 target/
 
+# Claude local settings (machine-specific)
+.claude/settings.json
+.claude/settings.local.json
+
 # Editor
 .DS_Store
 *.swp
