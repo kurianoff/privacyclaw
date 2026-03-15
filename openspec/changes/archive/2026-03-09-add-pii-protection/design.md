@@ -2,7 +2,7 @@
 
 ## Context
 
-claudovka Phase 1 is a zero-latency MITM proxy: bytes are forwarded immediately while parsing happens off-path on a tee'd copy. Phase 2 changes this contract for the **outbound (client→upstream) path only**: the request body must be fully buffered, PII-detected, and potentially rewritten before forwarding. The **inbound (upstream→client) path** retains near-zero latency via a prefix-aware streaming buffer.
+privacyclaw Phase 1 is a zero-latency MITM proxy: bytes are forwarded immediately while parsing happens off-path on a tee'd copy. Phase 2 changes this contract for the **outbound (client→upstream) path only**: the request body must be fully buffered, PII-detected, and potentially rewritten before forwarding. The **inbound (upstream→client) path** retains near-zero latency via a prefix-aware streaming buffer.
 
 The key asymmetry (from the task spec):
 - Outbound: full JSON body available before any byte goes to the LLM. Buffer → detect → replace → forward.
@@ -240,7 +240,7 @@ This means the client receives structurally identical SSE events but with text d
 
 - Phase 1 config files are fully compatible. The new `[pii]` section defaults to `mode = "off"`.
 - No storage migration required: new vault NDJSON lines are ignored by Phase 1 readers.
-- Binary is backwards-compatible: `claudovka start` without `--pii` flag behaves identically to Phase 1.
+- Binary is backwards-compatible: `privacyclaw start` without `--pii` flag behaves identically to Phase 1.
 
 ## Open Questions
 

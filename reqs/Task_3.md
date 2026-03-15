@@ -1,8 +1,8 @@
-# TASK: claudovka Phase 2 — PII Detection and Bidirectional Replacement
+# TASK: privacyclaw Phase 2 — PII Detection and Bidirectional Replacement
 
 ## Context
 
-claudovka Phase 1 is complete: a transparent MITM/reverse proxy intercepts traffic between AI coding agents (Claude Code CLI, VS Code Extension) and commercial LLM APIs (Anthropic, OpenAI). Traffic is captured and displayed in a real-time dashboard. No modification of traffic occurs yet.
+privacyclaw Phase 1 is complete: a transparent MITM/reverse proxy intercepts traffic between AI coding agents (Claude Code CLI, VS Code Extension) and commercial LLM APIs (Anthropic, OpenAI). Traffic is captured and displayed in a real-time dashboard. No modification of traffic occurs yet.
 
 Phase 2 adds the core privacy feature: detect PII/PHI/secrets in outbound requests, replace with synthetic data, and reverse the replacement in inbound responses.
 
@@ -95,7 +95,7 @@ When a request arrives at the proxy:
 - Convert to TOML locale pack format.
 - Start with: en-US, en-GB, de-DE, fr-FR, in-IN, kr-KR, br-BR.
 - Each locale pack: entity definitions with regex, context words, checksum functions.
-- **Verify**: `claudovka test-pii --locale in-IN "My Aadhaar is 1234 5678 9012"` detects correctly.
+- **Verify**: `privacyclaw test-pii --locale in-IN "My Aadhaar is 1234 5678 9012"` detects correctly.
 
 **Step 1: Parse request body.**
 Extract the `messages` array from the JSON body. Each message has `role` and `content`. Process the `content` of all messages (system, user, assistant from history).
@@ -252,7 +252,7 @@ llm = false        # Tier 3: Anonymizer SLM sidecar, ~100-500ms (opt-in)
 
 [pii.ner]
 model = "gliner-pii-base-v1.0"           # ONNX model name
-model_path = "~/.config/claudovka/models/" # Where ONNX models are stored
+model_path = "~/.config/privacyclaw/models/" # Where ONNX models are stored
 quantization = "uint8"                     # fp16 | uint8
 confidence_threshold = 0.7                 # Below this -> escalate to Tier 3 if enabled
 
@@ -269,23 +269,23 @@ max_entries_per_session = 500
 [pii.locale]
 default = "en-US"
 # Additional locale packs loaded from locale_dir
-locale_dir = "~/.config/claudovka/locales/"
+locale_dir = "~/.config/privacyclaw/locales/"
 ```
 
 ### 6. CLI Changes
 
 ```bash
 # Download and install PII models
-claudovka models install gliner-pii-base    # Downloads ONNX model (~200MB)
-claudovka models install anonymizer-slm-1.7b # Downloads GGUF model (~1.5GB)
-claudovka models list                        # Show installed models
+privacyclaw models install gliner-pii-base    # Downloads ONNX model (~200MB)
+privacyclaw models install anonymizer-slm-1.7b # Downloads GGUF model (~1.5GB)
+privacyclaw models list                        # Show installed models
 
 # Start with PII protection enabled
-claudovka start --pii                        # Tiers 1+2
-claudovka start --pii --llm                  # Tiers 1+2+3 (starts llama-server sidecar)
+privacyclaw start --pii                        # Tiers 1+2
+privacyclaw start --pii --llm                  # Tiers 1+2+3 (starts llama-server sidecar)
 
 # Test PII detection on a sample text
-claudovka test-pii "My name is John Smith, email john@acme.com, SSN 123-45-6789"
+privacyclaw test-pii "My name is John Smith, email john@acme.com, SSN 123-45-6789"
 # Output:
 #   Detected 3 PII entities:
 #     [PERSON] "John Smith" -> "Alice Brown" (Tier 2, confidence: 0.94)
@@ -342,7 +342,7 @@ src/
 - Implement regex patterns for all structured PII types.
 - Implement synthetic replacement generators per type.
 - Wire into outbound request pipeline: parse JSON body -> detect -> replace -> rebuild JSON.
-- **Verify**: `claudovka test-pii "email me at john@acme.com, my SSN is 123-45-6789"` correctly detects and replaces.
+- **Verify**: `privacyclaw test-pii "email me at john@acme.com, my SSN is 123-45-6789"` correctly detects and replaces.
 
 ### Step 3: Outbound Pipeline Integration
 - Insert PII processing between request receipt and upstream forwarding.
@@ -364,7 +364,7 @@ src/
 - Implement model download/install CLI commands.
 - Implement inference: text + entity labels -> detected spans.
 - Wire into outbound pipeline after Tier 1 (skip entities already found by regex).
-- **Verify**: `claudovka test-pii "Please tell Maria Johnson at 42 Oak Street about the project"` detects person name and address that regex would miss.
+- **Verify**: `privacyclaw test-pii "Please tell Maria Johnson at 42 Oak Street about the project"` detects person name and address that regex would miss.
 
 ### Step 6: Tier 3 Anonymizer SLM (optional)
 - Implement llama-server sidecar management (start/stop).
@@ -386,18 +386,18 @@ src/
 
 ## Success Criteria
 
-1. A Claude Code session through claudovka sends zero real PII to Anthropic's servers.
+1. A Claude Code session through privacyclaw sends zero real PII to Anthropic's servers.
 2. The LLM response is indistinguishable from a direct response — all synthetic names/data are seamlessly replaced back to originals.
 3. Tier 1+2 adds <100ms total latency to outbound requests.
 4. Inbound streaming replacement adds <5ms latency per SSE chunk (effectively zero perceived delay due to prefix-triggered buffering).
 5. Multi-turn conversations maintain consistent PII mappings.
-6. `claudovka test-pii` provides a fast way to verify detection quality on any text.
+6. `privacyclaw test-pii` provides a fast way to verify detection quality on any text.
 7. Works without Tier 3 (LLM sidecar) for users who don't want to run a local model — Tier 1+2 covers 90%+ of PII.
 
 ## Data Sources
 
 ### Taxonomy and Regex Patterns: Microsoft Presidio
-Port Presidio's recognizer definitions into claudovka's TOML locale packs.
+Port Presidio's recognizer definitions into privacyclaw's TOML locale packs.
 Do NOT use Presidio as a library (it's Python). Extract and reimplement:
 - Regex patterns per entity type per country
 - Context words that boost detection confidence
@@ -413,7 +413,7 @@ Use as ground truth for measuring detection quality.
 - 300k annotated entries, 6 languages, 8 jurisdictions
 - 98.3% token label accuracy, human-in-the-loop validated
 - Includes FinPII-80k subset for financial/insurance entities
-- Run claudovka pipeline (Tier 1 + Tier 2) against this dataset
+- Run privacyclaw pipeline (Tier 1 + Tier 2) against this dataset
 - Report F1, precision, recall per entity type and per locale
 
 Source: https://huggingface.co/datasets/ai4privacy/pii-masking-300k
@@ -429,11 +429,11 @@ Source: https://arxiv.org/html/2505.12238v1
 
 ### CLI for Benchmarking
 ```bash
-claudovka benchmark                    # Full benchmark against AI4Privacy
-claudovka benchmark --locale us        # US locale only  
-claudovka benchmark --locale de        # German locale only
-claudovka benchmark --tier 1           # Regex only
-claudovka benchmark --tier 1,2         # Regex + GLiNER
-claudovka benchmark --tier 1,2,3       # Full pipeline including LLM sidecar
-claudovka benchmark --report html      # Generate HTML report
+privacyclaw benchmark                    # Full benchmark against AI4Privacy
+privacyclaw benchmark --locale us        # US locale only  
+privacyclaw benchmark --locale de        # German locale only
+privacyclaw benchmark --tier 1           # Regex only
+privacyclaw benchmark --tier 1,2         # Regex + GLiNER
+privacyclaw benchmark --tier 1,2,3       # Full pipeline including LLM sidecar
+privacyclaw benchmark --report html      # Generate HTML report
 ```

@@ -1,6 +1,6 @@
 # PII Protection Setup
 
-claudovka can detect and replace personally identifiable information (PII) in
+privacyclaw can detect and replace personally identifiable information (PII) in
 LLM API traffic before it leaves the machine. The LLM never sees real email
 addresses, SSNs, API keys, or other sensitive data. Responses from the model
 are reverse-mapped on the way back, so the calling application receives the
@@ -10,7 +10,7 @@ original values transparently.
 
 ## Quick Start
 
-1. Open (or create) `~/.config/claudovka/config.toml` and add:
+1. Open (or create) `~/.config/privacyclaw/config.toml` and add:
 
    ```toml
    [pii]
@@ -21,15 +21,15 @@ original values transparently.
 2. Start the proxy normally:
 
    ```sh
-   claudovka start
+   privacyclaw start
    # or, for network mode:
-   claudovka network-start
+   privacyclaw network-start
    ```
 
 3. Confirm PII is being scrubbed by testing a sample string:
 
    ```sh
-   claudovka test-pii "My SSN is 123-45-6789 and email is john@acme.com"
+   privacyclaw test-pii "My SSN is 123-45-6789 and email is john@acme.com"
    ```
 
 That is all that is required for Tier 1 (regex) protection. No model
@@ -48,7 +48,7 @@ All PII settings live under the `[pii]` table in the config file.
 | `mode` | string | `"off"` | Master switch. See [Modes](#modes). |
 | `locale` | string | `"en-US"` | Locale for pattern selection. See [Locale support](#locale-support). |
 | `vault_ttl_hours` | integer | `24` | Hours to keep a conversation vault in memory after last use. |
-| `models_dir` | string | `~/.config/claudovka/models` | Directory for ML model files (Tier 2/3). |
+| `models_dir` | string | `~/.config/privacyclaw/models` | Directory for ML model files (Tier 2/3). |
 
 ### `[pii.tiers]`
 
@@ -67,7 +67,7 @@ Settings for the Tier 2 GLiNER model (only used when `pii.tiers.ner = true`).
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `model_path` | string | `~/.config/claudovka/models` | Path to the ONNX model directory. |
+| `model_path` | string | `~/.config/privacyclaw/models` | Path to the ONNX model directory. |
 | `confidence_threshold` | float | `0.5` | Minimum score (0.0–1.0) to accept a span as PII. |
 | `timeout_ms` | integer | `500` | Skip inference if it takes longer than this. |
 
@@ -131,8 +131,8 @@ mode = "replace"
 The `--pii` CLI flag also activates replace mode without editing the config:
 
 ```sh
-claudovka start --pii
-claudovka network-start --pii
+privacyclaw start --pii
+privacyclaw network-start --pii
 ```
 
 ---
@@ -143,7 +143,7 @@ Run the detector against a text string without starting the proxy. Useful for
 verifying pattern coverage or testing a specific input.
 
 ```sh
-claudovka test-pii "Contact me at john@acme.com, SSN 123-45-6789"
+privacyclaw test-pii "Contact me at john@acme.com, SSN 123-45-6789"
 ```
 
 Example output (default `text` format):
@@ -166,7 +166,7 @@ JSON output includes `type`, `original`, `synthetic`, `tier`, and `confidence`
 fields for each detection.
 
 ```sh
-claudovka test-pii "sk-abcdefghijklmnopqrstuvwxyz12345678901234" --format json
+privacyclaw test-pii "sk-abcdefghijklmnopqrstuvwxyz12345678901234" --format json
 ```
 
 ---
@@ -225,7 +225,7 @@ locale = "in-IN"
 Or override per `test-pii` run:
 
 ```sh
-claudovka test-pii "Aadhaar 2345 6789 0123" --locale in-IN
+privacyclaw test-pii "Aadhaar 2345 6789 0123" --locale in-IN
 ```
 
 Locale matching is case-insensitive and accepts underscores (`en_US`) as well
@@ -246,8 +246,8 @@ as hyphens (`en-US`).
   Install the model before enabling:
 
   ```sh
-  claudovka models install gliner-small
-  claudovka models list
+  privacyclaw models install gliner-small
+  privacyclaw models list
   ```
 
 - **Tier 3 (SLM sidecar):** Delegates to an external HTTP server running a

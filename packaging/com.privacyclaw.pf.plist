@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  LaunchDaemon (root): re-applies the privacyclaw pf anchor at boot.
+
+  Installed by: privacyclaw postinstall script (or 'privacyclaw network-enable')
+  Removed by:   privacyclaw uninstall / 'privacyclaw network-disable'
+
+  At boot pf rules in anchors are not persistent by themselves; this daemon
+  reloads /etc/pf.conf (which now contains the privacyclaw rdr-anchor and load
+  anchor declarations) so the redirect rules are re-applied automatically.
+  The anchor file check prevents a spurious pfctl error when the network
+  proxy has never been enabled (anchor file not yet written).
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.privacyclaw.pf</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <!-- Only reload if the anchor file is present (network proxy was enabled). -->
+        <string>test -f /etc/pf.anchors/privacyclaw &amp;&amp; pfctl -a privacyclaw -F all 2&gt;/dev/null; test -f /etc/pf.anchors/privacyclaw &amp;&amp; pfctl -ef /etc/pf.conf 2&gt;/dev/null; true</string>
+    </array>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/var/log/privacyclaw-pf.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>/var/log/privacyclaw-pf.log</string>
+</dict>
+</plist>

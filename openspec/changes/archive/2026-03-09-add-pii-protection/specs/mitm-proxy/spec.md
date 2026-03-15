@@ -64,7 +64,7 @@ The proxy SHALL accept a `VaultRegistry` and `PiiConfig` reference at initializa
 
 #### Scenario: VaultRegistry constructed at startup
 
-- **WHEN** `claudovka start` is invoked with `pii.mode != "off"`
+- **WHEN** `privacyclaw start` is invoked with `pii.mode != "off"`
 - **THEN** a `VaultRegistry` is constructed and passed to both `proxy::run` and `proxy::network::run`
 
 #### Scenario: VaultRegistry not constructed when PII is off

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-**Kladovka** ("storage room" in Russian) is a local MITM privacy proxy that intercepts HTTPS traffic between AI coding agents (Claude Code, Cursor, Codex, etc.) and commercial LLM APIs. It decrypts, parses, and displays all request/response traffic — including streaming SSE — in a real-time web dashboard.
+**Privacyclaw** ("storage room" in Russian) is a local MITM privacy proxy that intercepts HTTPS traffic between AI coding agents (Claude Code, Cursor, Codex, etc.) and commercial LLM APIs. It decrypts, parses, and displays all request/response traffic — including streaming SSE — in a real-time web dashboard.
 
 Phase 1 (MVP): observation mode only — no PII redaction, no modification. Goal: prove the core architecture.
 

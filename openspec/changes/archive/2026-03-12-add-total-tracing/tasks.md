@@ -22,7 +22,7 @@
 
 ## Phase 2: Infrastructure — JSON Formatter and File Output (needs Phase 1 complete)
 
-- [x] 2.1 Add `tracing-appender = "0.2"` to `claudovka/Cargo.toml`; enable the `json` and `registry` features on the existing `tracing-subscriber` dependency
+- [x] 2.1 Add `tracing-appender = "0.2"` to `privacyclaw/Cargo.toml`; enable the `json` and `registry` features on the existing `tracing-subscriber` dependency
 - [x] 2.2 Extend `LoggingConfig` in `src/config.rs`:
   - `format: String` (default `"text"` — backward-compatible; set `"json"` to opt in)
   - `file: Option<String>` (default `None` — file logging off by default to prevent disk exhaustion at TRACE level)

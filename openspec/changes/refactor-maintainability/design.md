@@ -105,7 +105,7 @@ cargo test                     # 175+ pass, 0 fail
 cargo clippy -- -D warnings    # clean (no new suppressions)
 ```
 
-Phase 4 (Config validation) adds new behavior (startup rejection of invalid configs). Any config file that was previously silently accepted with an invalid port may now fail `claudovka start`. This is intentional and desirable — document in release notes.
+Phase 4 (Config validation) adds new behavior (startup rejection of invalid configs). Any config file that was previously silently accepted with an invalid port may now fail `privacyclaw start`. This is intentional and desirable — document in release notes.
 
 ## Open Questions
 

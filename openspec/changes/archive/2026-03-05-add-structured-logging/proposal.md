@@ -2,7 +2,7 @@
 
 ## Why
 
-When issues occur in claudovka (dropped messages, TLS failures, storage anomalies, stalled connections), the current sparse `tracing` calls make it impossible to pinpoint the exact code path or data state. A three-tier structured logging strategy gives full observability at every granularity: DEBUG for every branch + raw transmitted bytes, INFO for every atomic operation, WARN for every lifecycle event — without any functional changes.
+When issues occur in privacyclaw (dropped messages, TLS failures, storage anomalies, stalled connections), the current sparse `tracing` calls make it impossible to pinpoint the exact code path or data state. A three-tier structured logging strategy gives full observability at every granularity: DEBUG for every branch + raw transmitted bytes, INFO for every atomic operation, WARN for every lifecycle event — without any functional changes.
 
 ## What Changes
 

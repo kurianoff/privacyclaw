@@ -2,11 +2,11 @@
 
 ## 0. Version Labeling
 
-- [x] 0.1 Create `claudovka/build.rs`: run `git rev-parse --short HEAD` and capture ISO-8601 date; emit `cargo:rustc-env=GIT_HASH=...` and `cargo:rustc-env=BUILD_DATE=...`
-- [x] 0.2 Create `claudovka/src/version.rs`: expose `VERSION`, `GIT_HASH`, `BUILD_DATE` constants and `version_string()` helper returning `"<ver> (<hash> <date>)"`
+- [x] 0.1 Create `privacyclaw/build.rs`: run `git rev-parse --short HEAD` and capture ISO-8601 date; emit `cargo:rustc-env=GIT_HASH=...` and `cargo:rustc-env=BUILD_DATE=...`
+- [x] 0.2 Create `privacyclaw/src/version.rs`: expose `VERSION`, `GIT_HASH`, `BUILD_DATE` constants and `version_string()` helper returning `"<ver> (<hash> <date>)"`
 - [x] 0.3 Add `mod version;` to `main.rs`; update `#[command(...)]` to use `version_string()` as the clap version string; emit startup WARN log with `version` and `git_hash` fields
 - [x] 0.4 Add `GET /api/version` endpoint to `dashboard/mod.rs` returning `{ version, git_hash, build_date }`
-- [x] 0.5 Fetch `/api/version` on dashboard load and display `claudovka v<X.Y.Z>` in the header
+- [x] 0.5 Fetch `/api/version` on dashboard load and display `privacyclaw v<X.Y.Z>` in the header
 - [x] 0.6 Add `VERSION := $(shell cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')` to `Makefile`; use in pkg/dmg filenames
 - [x] 0.7 Unit test: `version_string()` contains the semver, a 7-char hex hash, and a date in YYYY-MM-DD format
 
@@ -56,12 +56,12 @@
 
 ## 6. CLI Network Privilege Helper
 
-- [x] 6.1 Implement `/etc/hosts` snapshot: before any change, write original content to `~/.config/claudovka/backup/hosts.bak`
-- [x] 6.2 Implement `/etc/hosts` writer: append one `127.0.0.1 <domain> # claudovka` line per intercept domain; skip if already present
-- [x] 6.3 Implement `/etc/hosts` reverter: remove all lines containing `# claudovka`; verify no claudovka entries remain
-- [x] 6.4 Implement `claudovka network-enable`: snapshot hosts + pf.conf, write hosts entries, write `/etc/pf.anchors/claudovka`, patch `/etc/pf.conf`, run `pfctl`, install LaunchDaemon — all via a single `osascript` admin dialog
-- [x] 6.5 Implement `claudovka network-disable`: remove `# claudovka` hosts lines, flush pf anchor, remove pf.conf include, unload + remove LaunchDaemon
-- [x] 6.6 Write the LaunchDaemon plist template (`com.claudovka.pf.plist`) that re-applies the anchor at boot
+- [x] 6.1 Implement `/etc/hosts` snapshot: before any change, write original content to `~/.config/privacyclaw/backup/hosts.bak`
+- [x] 6.2 Implement `/etc/hosts` writer: append one `127.0.0.1 <domain> # privacyclaw` line per intercept domain; skip if already present
+- [x] 6.3 Implement `/etc/hosts` reverter: remove all lines containing `# privacyclaw`; verify no privacyclaw entries remain
+- [x] 6.4 Implement `privacyclaw network-enable`: snapshot hosts + pf.conf, write hosts entries, write `/etc/pf.anchors/privacyclaw`, patch `/etc/pf.conf`, run `pfctl`, install LaunchDaemon — all via a single `osascript` admin dialog
+- [x] 6.5 Implement `privacyclaw network-disable`: remove `# privacyclaw` hosts lines, flush pf anchor, remove pf.conf include, unload + remove LaunchDaemon
+- [x] 6.6 Write the LaunchDaemon plist template (`com.privacyclaw.pf.plist`) that re-applies the anchor at boot
 - [x] 6.7 Handle idempotency: re-running `network-enable` when already active verifies and refreshes entries without re-prompting
 - [x] 6.8 Handle domain list changes: re-running `network-enable` after adding/removing a domain from config updates `/etc/hosts` accordingly
 - [x] 6.9 Wire dashboard Network Proxy toggle to call `network-enable`/`network-disable` via subprocess
@@ -69,24 +69,24 @@
 
 ### 6. Tests (Network Privilege Helper)
 
-- [x] 6.T1 Unit test: `build_hosts_entries(domains)` produces one `127.0.0.1 <domain> # claudovka` line per domain, no duplicates
-- [x] 6.T2 Unit test: `remove_claudovka_lines(content)` removes all `# claudovka` lines and leaves all other lines intact
-- [x] 6.T3 Unit test: `has_claudovka_entries(content)` returns true iff at least one `# claudovka` line is present
+- [x] 6.T1 Unit test: `build_hosts_entries(domains)` produces one `127.0.0.1 <domain> # privacyclaw` line per domain, no duplicates
+- [x] 6.T2 Unit test: `remove_privacyclaw_lines(content)` removes all `# privacyclaw` lines and leaves all other lines intact
+- [x] 6.T3 Unit test: `has_privacyclaw_entries(content)` returns true iff at least one `# privacyclaw` line is present
 - [x] 6.T4 Unit test: idempotency — calling `build_hosts_entries` on already-modified content does not add duplicate entries
 - [x] 6.T5 Unit test: domain list change — adding a domain produces a new entry; removing one drops the old entry
 - [x] 6.T6 Unit test: `build_pf_anchor(port)` produces the correct `rdr pass on lo0` rule string for the given port
 
 ## 6b. Full Uninstaller
 
-- [x] 6b.1 Implement `claudovka uninstall` orchestrator: ordered step list with per-step result (done / skipped / failed)
+- [x] 6b.1 Implement `privacyclaw uninstall` orchestrator: ordered step list with per-step result (done / skipped / failed)
 - [x] 6b.2 Step: gracefully stop running proxy (SIGTERM + wait up to 5s, then SIGKILL)
-- [x] 6b.3 Step: unload and remove LaunchAgent (`~/Library/LaunchAgents/com.claudovka.proxy.plist`)
-- [x] 6b.4 Step: if network proxy was ever enabled — revert `/etc/hosts` (remove `# claudovka` lines) via osascript admin dialog
+- [x] 6b.3 Step: unload and remove LaunchAgent (`~/Library/LaunchAgents/com.privacyclaw.proxy.plist`)
+- [x] 6b.4 Step: if network proxy was ever enabled — revert `/etc/hosts` (remove `# privacyclaw` lines) via osascript admin dialog
 - [x] 6b.5 Step: flush pf anchor, remove include from `/etc/pf.conf`, unload + remove pf LaunchDaemon via osascript
 - [x] 6b.6 Step: remove CA from System keychain (`security remove-trusted-cert` + `security delete-certificate`) via osascript
-- [x] 6b.7 Step: delete `/usr/local/bin/claudovka` and `/Applications/Claudovka.app` (if present)
-- [x] 6b.8 Step: delete `~/.config/claudovka/bin/llama-server`
-- [x] 6b.9 Step (`--purge` only): `rm -rf ~/.config/claudovka/` — models, logs, DB, config, CA, backups
+- [x] 6b.7 Step: delete `/usr/local/bin/privacyclaw` and `/Applications/Privacyclaw.app` (if present)
+- [x] 6b.8 Step: delete `~/.config/privacyclaw/bin/llama-server`
+- [x] 6b.9 Step (`--purge` only): `rm -rf ~/.config/privacyclaw/` — models, logs, DB, config, CA, backups
 - [x] 6b.10 Print final summary table with ✓ / ⚠ / ✗ per step; exit non-zero if any step failed
 - [x] 6b.11 Unit tests: mock each privileged step; verify ordering and that `--purge` flag gates data deletion
 - [ ] 6b.12 Manual test: full install → enable network proxy → `uninstall` → confirm system is clean; repeat with `--purge`
@@ -109,12 +109,12 @@
 - [x] 7.3 Build menu: Open Dashboard, HTTP Proxy toggle (checked), Network Proxy toggle (checked), PII submenu, separator, Quit (`src/tray.rs`)
 - [x] 7.4 Reflect live proxy state in menu (check marks update when config changes via WS `config_changed` event)  <!-- implemented via polling GET /api/config every ~5s -->
 - [x] 7.5 Network Proxy menu toggle calls `network-enable`/`network-disable` and shows system auth dialog (via subprocess)
-- [x] 7.6 Add `--tray` flag to `claudovka start` that enters menu bar mode
+- [x] 7.6 Add `--tray` flag to `privacyclaw start` that enters menu bar mode
 - [x] 7.7 Add app icon (512×512 PNG + ICNS) to `assets/` (procedural icon: navy background + white ring + teal dot)
 
 ### 7. Tests (Menu Bar App)
 
-- [ ] 7.T1 Manual test: launch `claudovka start --tray`; confirm menu bar icon appears and no Dock icon is shown
+- [ ] 7.T1 Manual test: launch `privacyclaw start --tray`; confirm menu bar icon appears and no Dock icon is shown
 - [ ] 7.T2 Manual test: toggle HTTP Proxy off from the menu; confirm the proxy stops accepting connections; toggle on, confirm it resumes
 - [ ] 7.T3 Manual test: select Network Proxy toggle when disabled; confirm native macOS admin dialog appears; confirm pf rules are applied on success
 - [ ] 7.T4 Manual test: switch PII mode from Off → Tier 1 via the menu submenu; confirm `GET /api/config` reflects the new mode
@@ -123,55 +123,55 @@
 
 ## 8. macOS App Bundle
 
-- [x] 8.1 Create `Claudovka.app` bundle skeleton: `Contents/{MacOS,Resources,Info.plist}` (`make app` target)
-- [x] 8.2 Write `Info.plist` with `LSUIElement = true`, bundle identifier `com.claudovka.app`, minimum macOS 13
-- [x] 8.3 Write launch script (`Contents/MacOS/claudovka-app`) that calls `claudovka start --tray`
+- [x] 8.1 Create `Privacyclaw.app` bundle skeleton: `Contents/{MacOS,Resources,Info.plist}` (`make app` target)
+- [x] 8.2 Write `Info.plist` with `LSUIElement = true`, bundle identifier `com.privacyclaw.app`, minimum macOS 13
+- [x] 8.3 Write launch script (`Contents/MacOS/privacyclaw-app`) that calls `privacyclaw start --tray`
 - [x] 8.4 Add `make app` Makefile target that builds the binary (arm64 + x86_64 universal with `--features tray`) and assembles the bundle
 - [ ] 8.5 Validate: open app on macOS, confirm no Dock icon, confirm menu bar icon and proxy start
 
 ### 8. Tests (App Bundle)
 
 - [x] 8.T1 Unit test: `extract_llama_server(bundle_path, dest_path)` copies the binary and sets executable bit; skips if already present
-- [ ] 8.T2 Manual test: build `make app`; open `Claudovka.app`; confirm `LSUIElement` suppresses Dock icon
-- [ ] 8.T3 Manual test: remove `~/.config/claudovka/bin/llama-server` before launch; confirm it is extracted on first start
-- [x] 8.T4 Automated test: `make app` produces `Claudovka.app/Contents/Info.plist` with `LSUIElement = true` and correct bundle identifier
+- [ ] 8.T2 Manual test: build `make app`; open `Privacyclaw.app`; confirm `LSUIElement` suppresses Dock icon
+- [ ] 8.T3 Manual test: remove `~/.config/privacyclaw/bin/llama-server` before launch; confirm it is extracted on first start
+- [x] 8.T4 Automated test: `make app` produces `Privacyclaw.app/Contents/Info.plist` with `LSUIElement = true` and correct bundle identifier
 
 ## 9. macOS .pkg Installer
 
 - [x] 9.1 Write postinstall script: generate CA if absent, `security add-trusted-cert`, install LaunchAgent plist
-- [x] 9.2 Write LaunchAgent plist (`com.claudovka.proxy.plist`) for auto-start at login
-- [x] 9.3 Add `make pkg` Makefile target using `pkgbuild` + `productbuild` to produce `claudovka-<version>.pkg`
+- [x] 9.2 Write LaunchAgent plist (`com.privacyclaw.proxy.plist`) for auto-start at login
+- [x] 9.3 Add `make pkg` Makefile target using `pkgbuild` + `productbuild` to produce `privacyclaw-<version>.pkg`
 - [ ] 9.4 Test end-to-end install on a clean macOS VM; verify CA trusted, proxy auto-starts, dashboard reachable
 
 ### 9. Tests (.pkg Installer)
 
-- [x] 9.T1 Unit test: `postinstall_should_skip_ca()` returns true when `~/.config/claudovka/ca/ca.pem` already exists
+- [x] 9.T1 Unit test: `postinstall_should_skip_ca()` returns true when `~/.config/privacyclaw/ca/ca.pem` already exists
 - [x] 9.T2 Unit test: postinstall script (`packaging/postinstall`) is executable and contains `security add-trusted-cert` invocation
-- [x] 9.T3 Automated test: `make pkg` produces `dist/claudovka-<version>.pkg`; verify the package list (`pkgutil --payload-files`) includes the binary and LaunchAgent plist
+- [x] 9.T3 Automated test: `make pkg` produces `dist/privacyclaw-<version>.pkg`; verify the package list (`pkgutil --payload-files`) includes the binary and LaunchAgent plist
 - [ ] 9.T4 Manual test (clean macOS VM): run `.pkg`, verify CA in System keychain, proxy starts at login, `http://localhost:16443` reachable
 - [ ] 9.T5 Manual test: reinstall on existing installation; verify CA is not overwritten and existing data survives
 
 ## 10. Homebrew Distribution
 
-- [x] 10.1 Create `homebrew-claudovka` repository structure with formula and cask directories
-- [x] 10.2 Write Homebrew formula `claudovka.rb`: downloads binary tarball + llama-server resource, configures `brew services` plist
-- [x] 10.3 Write Homebrew cask `claudovka-app.rb`: installs `.dmg` → `/Applications/Claudovka.app`, links CLI binary
-- [ ] 10.4 Test `brew install <tap>/claudovka && brew services start claudovka` on macOS
-- [ ] 10.5 Test `brew install --cask <tap>/claudovka-app` and launch from Applications
+- [x] 10.1 Create `homebrew-privacyclaw` repository structure with formula and cask directories
+- [x] 10.2 Write Homebrew formula `privacyclaw.rb`: downloads binary tarball + llama-server resource, configures `brew services` plist
+- [x] 10.3 Write Homebrew cask `privacyclaw-app.rb`: installs `.dmg` → `/Applications/Privacyclaw.app`, links CLI binary
+- [ ] 10.4 Test `brew install <tap>/privacyclaw && brew services start privacyclaw` on macOS
+- [ ] 10.5 Test `brew install --cask <tap>/privacyclaw-app` and launch from Applications
 
 ### 10. Tests (Homebrew Distribution)
 
-- [x] 10.T1 Automated test: `claudovka.rb` formula parses without error (`brew audit --strict <tap>/claudovka`)
-- [x] 10.T2 Automated test: `claudovka-app.rb` cask parses without error (`brew audit --cask <tap>/claudovka-app`)
-- [ ] 10.T3 Manual test: `brew install <tap>/claudovka && brew services start claudovka`; verify proxy on 16440, dashboard on 16443
-- [ ] 10.T4 Manual test: `brew services stop claudovka`; verify process exits cleanly
-- [ ] 10.T5 Manual test: `brew install --cask <tap>/claudovka-app`; open from Applications; verify menu bar icon
+- [x] 10.T1 Automated test: `privacyclaw.rb` formula parses without error (`brew audit --strict <tap>/privacyclaw`)
+- [x] 10.T2 Automated test: `privacyclaw-app.rb` cask parses without error (`brew audit --cask <tap>/privacyclaw-app`)
+- [ ] 10.T3 Manual test: `brew install <tap>/privacyclaw && brew services start privacyclaw`; verify proxy on 16440, dashboard on 16443
+- [ ] 10.T4 Manual test: `brew services stop privacyclaw`; verify process exits cleanly
+- [ ] 10.T5 Manual test: `brew install --cask <tap>/privacyclaw-app`; open from Applications; verify menu bar icon
 
 ## 11. Proxy Start/Stop Toggle
 
-- [x] 11.1 Write PID file on proxy start (`~/.config/claudovka/claudovka.pid`); remove on clean shutdown
-- [x] 11.2 Implement `claudovka stop`: read PID file, send SIGTERM, wait 5s, SIGKILL if needed, remove PID file
-- [x] 11.3 Handle `claudovka stop` when proxy is not running: print message, exit 0
+- [x] 11.1 Write PID file on proxy start (`~/.config/privacyclaw/privacyclaw.pid`); remove on clean shutdown
+- [x] 11.2 Implement `privacyclaw stop`: read PID file, send SIGTERM, wait 5s, SIGKILL if needed, remove PID file
+- [x] 11.3 Handle `privacyclaw stop` when proxy is not running: print message, exit 0
 - [x] 11.4 Implement `POST /api/proxy/stop` dashboard endpoint: drain connections, stop listener, broadcast `proxy_status { running: false }`, remove PID file
 - [x] 11.5 Implement `POST /api/proxy/start` dashboard endpoint: resume listener, broadcast `proxy_status { running: true }`
 - [x] 11.6 Implement `GET /api/proxy/status` endpoint returning running state, http_proxy, network_proxy, pii_mode

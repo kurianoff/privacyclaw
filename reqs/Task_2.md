@@ -1,7 +1,7 @@
-Implement 'kladovka' CLI.
+Implement 'privacyclaw' CLI.
 
-I would like to be able to install kladovka the following way:
-kladovka init --install-ca <- will initialize kladovka and install CA
-kladovka run <- will run kladovka proxy
+I would like to be able to install privacyclaw the following way:
+privacyclaw init --install-ca <- will initialize privacyclaw and install CA
+privacyclaw run <- will run privacyclaw proxy
 
 

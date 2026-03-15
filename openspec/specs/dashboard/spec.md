@@ -1,7 +1,7 @@
 # dashboard Specification
 
 ## Purpose
-TBD - created by archiving change add-kladovka-mvp. Update Purpose after archive.
+TBD - created by archiving change add-privacyclaw-mvp. Update Purpose after archive.
 ## Requirements
 ### Requirement: HTTP Dashboard Server
 

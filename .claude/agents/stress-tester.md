@@ -13,7 +13,7 @@ Real stress tests don't just hammer throughput — they verify **correctness und
 - The system must handle backpressure gracefully, not drop data
 - PII masking must be deterministic and lossless regardless of concurrency
 
-## For this project (claudovka proxy)
+## For this project (privacyclaw proxy)
 
 The proxy uses `intercept::run(client_r, client_w, upstream_r, upstream_w, ...)` with in-memory duplex streams. No real TLS or network is required. Stress scenarios simulate:
 

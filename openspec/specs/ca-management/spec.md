@@ -1,32 +1,32 @@
 # ca-management Specification
 
 ## Purpose
-TBD - created by archiving change add-kladovka-mvp. Update Purpose after archive.
+TBD - created by archiving change add-privacyclaw-mvp. Update Purpose after archive.
 ## Requirements
 ### Requirement: CA Initialization
 
-On first run via `kladovka init`, the system SHALL generate a root CA key pair (ECDSA P-256) and self-signed root certificate and store them in a platform-specific secure location (`~/Library/Application Support/kladovka/ca/` on macOS, `~/.config/kladovka/ca/` on Linux, `%APPDATA%\kladovka\ca\` on Windows).
+On first run via `privacyclaw init`, the system SHALL generate a root CA key pair (ECDSA P-256) and self-signed root certificate and store them in a platform-specific secure location (`~/Library/Application Support/privacyclaw/ca/` on macOS, `~/.config/privacyclaw/ca/` on Linux, `%APPDATA%\privacyclaw\ca\` on Windows).
 
 #### Scenario: First-time initialization
 
-- **WHEN** the user runs `kladovka init` and no CA exists
+- **WHEN** the user runs `privacyclaw init` and no CA exists
 - **THEN** a new ECDSA P-256 key pair and self-signed certificate are generated
 - **AND** they are saved to the platform-appropriate directory
 - **AND** the CA certificate path is printed to stdout
 
 #### Scenario: Re-use existing CA
 
-- **WHEN** the user runs `kladovka init` and a CA already exists
+- **WHEN** the user runs `privacyclaw init` and a CA already exists
 - **THEN** the existing CA is loaded without regeneration
 - **AND** the user is notified that the existing CA was found
 
 ### Requirement: CA Trust Store Installation
 
-The system SHALL offer to install the CA certificate into the OS trust store via `kladovka init --install-ca`, with platform-specific commands.
+The system SHALL offer to install the CA certificate into the OS trust store via `privacyclaw init --install-ca`, with platform-specific commands.
 
 #### Scenario: macOS trust store installation
 
-- **WHEN** the user runs `kladovka init --install-ca` on macOS
+- **WHEN** the user runs `privacyclaw init --install-ca` on macOS
 - **THEN** the system runs `security add-trusted-cert` with the CA certificate
 - **AND** reports success or failure with instructions for manual installation
 
@@ -37,11 +37,11 @@ The system SHALL offer to install the CA certificate into the OS trust store via
 
 ### Requirement: CA Reset
 
-The system SHALL support `kladovka reset-ca` to delete the existing CA and generate a new one.
+The system SHALL support `privacyclaw reset-ca` to delete the existing CA and generate a new one.
 
 #### Scenario: CA reset
 
-- **WHEN** the user runs `kladovka reset-ca`
+- **WHEN** the user runs `privacyclaw reset-ca`
 - **THEN** existing CA files are deleted
 - **AND** a new CA key pair and certificate are generated and saved
 

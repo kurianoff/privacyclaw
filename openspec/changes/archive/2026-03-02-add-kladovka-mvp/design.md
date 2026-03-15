@@ -1,8 +1,8 @@
-# Design: Kladovka MVP
+# Design: Privacyclaw MVP
 
 ## Context
 
-Kladovka is a local developer tool that acts as an HTTPS MITM proxy to observe traffic between AI coding agents and LLM APIs. Phase 1 is observation-only; no modifications to traffic.
+Privacyclaw is a local developer tool that acts as an HTTPS MITM proxy to observe traffic between AI coding agents and LLM APIs. Phase 1 is observation-only; no modifications to traffic.
 
 Stakeholders: individual developers and security-conscious teams wanting visibility into LLM data flows.
 

@@ -100,7 +100,7 @@ Each phase is independently mergeable. Run `cargo build && cargo test && cargo c
 - [ ] 4.1.3 Run `cargo clippy -- -D warnings`
 
 ### 4.2 CA module cleanup
-- [ ] 4.2.1 Add `pub(crate) const CA_ORG_NAME: &str = "Claudovka Privacy Proxy";` and `pub(crate) const CA_COMMON_NAME: &str = "Claudovka Root CA";` in `ca/mod.rs`
+- [ ] 4.2.1 Add `pub(crate) const CA_ORG_NAME: &str = "Privacyclaw Privacy Proxy";` and `pub(crate) const CA_COMMON_NAME: &str = "Privacyclaw Root CA";` in `ca/mod.rs`
 - [ ] 4.2.2 Replace the hardcoded string literals in `generate_ca()` (`ca/mod.rs`) with the new constants
 - [ ] 4.2.3 Replace the hardcoded string literals in `build_certified_key()` (`ca/cert_gen.rs`) with `crate::ca::CA_ORG_NAME` / `crate::ca::CA_COMMON_NAME`
 - [ ] 4.2.4 Remove the `cert_pem` field from `CaBundle` struct (it is never read after construction); update `generate_ca()` and any `CaBundle { … }` construction sites

@@ -17,7 +17,7 @@ Keep this managed block so 'openspec update' can refresh the instructions.
 
 <!-- OPENSPEC:END -->
 
-# Kladovka
+## Privacyclaw
 
 Privacy proxy for AI agent traffic. Rust project.
 
@@ -43,7 +43,7 @@ Rules:
 - Redact `Authorization` and `X-Api-Key` header values in all log output (`fmt_headers` helper in `util.rs`).
 - Truncate raw byte dumps to 256 bytes (`fmt_chunk_hex` helper in `util.rs`).
 - Never log inside a held `Mutex` lock beyond the minimal critical section.
-- Override at runtime: `RUST_LOG=claudovka=debug` or via `logging.level` in config TOML.
+- Override at runtime: `RUST_LOG=privacyclaw=debug` or via `logging.level` in config TOML.
 
 ## Architecture
 See docs/TASK-phase1.md for current implementation plan.

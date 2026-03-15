@@ -9,7 +9,7 @@ The system SHALL instrument every source module with `tracing` calls at five dis
 
 #### Scenario: TRACE level exposes every decision branch in the PII pipeline
 
-- **WHEN** the subscriber's max level is TRACE (`RUST_LOG=claudovka=trace`)
+- **WHEN** the subscriber's max level is TRACE (`RUST_LOG=privacyclaw=trace`)
 - **THEN** every conditional branch, pattern match attempt, character-level buffer decision, and vault key lookup in the PII pipeline emits a `tracing::trace!` call with structured key=value fields identifying the branch outcome
 - **AND** no log call allocates on the heap when the subscriber's configured level would filter the record out (the `tracing` crate's disabled-check guarantee)
 
@@ -110,13 +110,13 @@ The system SHALL support a `json` log format that emits each log record as a sin
 
 The JSON shape SHALL be:
 ```json
-{"ts":"2026-03-12T10:00:00.123456Z","level":"DEBUG","target":"claudovka::pii::tier1","msg":"pattern matched","entity_type":"Email","span_start":5,"span_end":22}
+{"ts":"2026-03-12T10:00:00.123456Z","level":"DEBUG","target":"privacyclaw::pii::tier1","msg":"pattern matched","entity_type":"Email","span_start":5,"span_end":22}
 ```
 
 Fields:
 - `ts` — RFC 3339 UTC timestamp with microsecond precision
 - `level` — uppercase level name: `TRACE`, `DEBUG`, `INFO`, `WARN`, `ERROR`
-- `target` — Rust module path (e.g. `claudovka::pii::synth`)
+- `target` — Rust module path (e.g. `privacyclaw::pii::synth`)
 - `msg` — the static message string from the macro call
 - Additional structured fields appended as sibling JSON keys
 
@@ -146,7 +146,7 @@ The system SHALL support writing log records to a rolling file in addition to (n
 
 #### Scenario: File output enabled
 
-- **WHEN** `[logging].file = "/var/log/claudovka/app.log"` is set
+- **WHEN** `[logging].file = "/var/log/privacyclaw/app.log"` is set
 - **THEN** log records are written to that path in the configured format, in addition to stderr
 - **AND** the file is created if it does not exist (parent directory must exist)
 
