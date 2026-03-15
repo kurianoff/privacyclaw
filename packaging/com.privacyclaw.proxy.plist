@@ -10,6 +10,7 @@
     <array>
         <string>/usr/local/bin/privacyclaw</string>
         <string>start</string>
+        <string>--tray</string>
     </array>
 
     <key>RunAtLoad</key>

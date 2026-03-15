@@ -12,16 +12,18 @@ const PRIVACYCLAW_TAG: &str = "# privacyclaw";
 // ── Pure logic (testable without root / osascript) ───────────────────────────
 
 /// Build the `/etc/hosts` lines for the given domains.
-/// Each domain gets one line: `127.0.0.1  <domain>  # privacyclaw`.
+/// Each domain gets two lines: `127.0.0.1` (IPv4) and `::1` (IPv6), both tagged.
 /// Lines are skipped if an identical entry already exists in `existing_content`.
 pub fn build_hosts_entries(domains: &[&str], existing_content: &str) -> String {
     let mut out = String::new();
     for domain in domains {
-        let line = format!("127.0.0.1  {}  {}", domain, PRIVACYCLAW_TAG);
-        // Idempotency: skip if exact line already present.
-        if !existing_content.lines().any(|l| l.trim() == line.trim()) {
-            out.push_str(&line);
-            out.push('\n');
+        for addr in &["127.0.0.1", "::1"] {
+            let line = format!("{}  {}  {}", addr, domain, PRIVACYCLAW_TAG);
+            // Idempotency: skip if exact line already present.
+            if !existing_content.lines().any(|l| l.trim() == line.trim()) {
+                out.push_str(&line);
+                out.push('\n');
+            }
         }
     }
     out
@@ -262,15 +264,17 @@ pub fn is_enabled() -> bool {
 mod tests {
     use super::*;
 
-    // 6.T1 — build_hosts_entries produces correct entries, no duplicates.
+    // 6.T1 — build_hosts_entries produces IPv4 + IPv6 entries, no duplicates.
     #[test]
     fn test_build_hosts_entries_no_duplicates() {
         let domains = ["api.anthropic.com", "api.openai.com"];
         let result = build_hosts_entries(&domains, "");
         assert!(result.contains("127.0.0.1  api.anthropic.com  # privacyclaw"));
+        assert!(result.contains("::1  api.anthropic.com  # privacyclaw"));
         assert!(result.contains("127.0.0.1  api.openai.com  # privacyclaw"));
-        // Two domains → two lines.
-        assert_eq!(result.lines().count(), 2);
+        assert!(result.contains("::1  api.openai.com  # privacyclaw"));
+        // Two domains × two addresses = four lines.
+        assert_eq!(result.lines().count(), 4);
     }
 
     // 6.T1 — no extra lines for unrelated domains.
@@ -280,15 +284,17 @@ mod tests {
         assert!(!result.contains("openai"));
     }
 
-    // 6.T4 — idempotency: existing entry is not duplicated.
+    // 6.T4 — idempotency: existing entries are not duplicated.
     #[test]
     fn test_build_hosts_entries_idempotent() {
-        let existing = "127.0.0.1  api.anthropic.com  # privacyclaw\n";
+        let existing = "127.0.0.1  api.anthropic.com  # privacyclaw\n\
+                        ::1  api.anthropic.com  # privacyclaw\n";
         let result = build_hosts_entries(&["api.anthropic.com", "api.openai.com"], existing);
-        // anthropic is already present → only openai added.
+        // Both anthropic entries already present → only openai added (2 lines).
         assert!(!result.contains("api.anthropic.com"));
-        assert!(result.contains("api.openai.com"));
-        assert_eq!(result.lines().count(), 1);
+        assert!(result.contains("127.0.0.1  api.openai.com  # privacyclaw"));
+        assert!(result.contains("::1  api.openai.com  # privacyclaw"));
+        assert_eq!(result.lines().count(), 2);
     }
 
     // 6.T2 — remove_privacyclaw_lines removes tagged lines, preserves others.
@@ -320,22 +326,26 @@ mod tests {
         assert!(!has_privacyclaw_entries(content));
     }
 
-    // 6.T5 — domain list change: add domain → new entry; remove domain → entry gone.
+    // 6.T5 — domain list change: add domain → new entries; remove domain → entries gone.
     #[test]
     fn test_domain_list_change() {
         let original_domains = ["api.anthropic.com"];
         let existing = build_hosts_entries(&original_domains, "");
+        // One domain → two lines (IPv4 + IPv6).
+        assert_eq!(existing.lines().count(), 2);
 
         // Add api.openai.com.
         let updated = existing.clone() + &build_hosts_entries(&["api.anthropic.com", "api.openai.com"], &existing);
-        assert!(updated.contains("api.openai.com"));
+        assert!(updated.contains("127.0.0.1  api.openai.com  # privacyclaw"));
+        assert!(updated.contains("::1  api.openai.com  # privacyclaw"));
 
         // Remove api.anthropic.com by rebuilding from scratch (simulate config change).
         let new_domains = ["api.openai.com"];
         let cleaned = remove_privacyclaw_lines(&existing);
         let rebuilt = build_hosts_entries(&new_domains, &cleaned);
         assert!(!rebuilt.contains("api.anthropic.com"));
-        assert!(rebuilt.contains("api.openai.com"));
+        assert!(rebuilt.contains("127.0.0.1  api.openai.com  # privacyclaw"));
+        assert!(rebuilt.contains("::1  api.openai.com  # privacyclaw"));
     }
 
     // 6.T6 — build_pf_anchor produces correct rdr rule for given port.
