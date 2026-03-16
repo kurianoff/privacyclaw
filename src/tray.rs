@@ -11,6 +11,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Notify;
+use config::default_ca_dir;
 use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     Icon, TrayIconBuilder,
@@ -389,10 +390,17 @@ pub fn run(
                 std::thread::spawn(move || {
                     let enabled = crate::network_helper::is_enabled();
                     let result = if enabled {
-                        crate::network_helper::disable()
+                        let r = crate::network_helper::disable();
+                        if r.is_ok() { crate::launchctl_unset_node_ca(); }
+                        r
                     } else {
                         let d: Vec<&str> = domains2.iter().map(|s| s.as_str()).collect();
-                        crate::network_helper::enable(&d, port2)
+                        let r = crate::network_helper::enable(&d, port2);
+                        if r.is_ok() {
+                            let ca_pem = crate::ca::ca_cert_path(&default_ca_dir());
+                            crate::launchctl_set_node_ca(&ca_pem);
+                        }
+                        r
                     };
                     if let Err(e) = result {
                         tracing::warn!(err = %e, "network proxy toggle failed");

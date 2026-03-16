@@ -823,7 +823,7 @@ async fn cmd_stop() -> Result<()> {
 /// Set NODE_EXTRA_CA_CERTS in the current launchd session and persist it via a
 /// LaunchAgent plist so GUI apps (VSCode / Electron) inherit it across reboots.
 #[cfg(target_os = "macos")]
-fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
+pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
     let ca_str = ca_pem.display().to_string();
 
     // Set for the current session.
@@ -896,7 +896,7 @@ fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
 
 /// Undo NODE_EXTRA_CA_CERTS: unset from current session and remove the LaunchAgent plist.
 #[cfg(target_os = "macos")]
-fn launchctl_unset_node_ca() {
+pub(crate) fn launchctl_unset_node_ca() {
     match std::process::Command::new("launchctl")
         .args(["unsetenv", "NODE_EXTRA_CA_CERTS"])
         .status()
