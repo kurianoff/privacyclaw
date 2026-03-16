@@ -1,6 +1,6 @@
 [package]
 name = "privacyclaw"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 description = "Local MITM privacy proxy for LLM API traffic inspection"
 license = "MIT"
