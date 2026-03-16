@@ -131,13 +131,13 @@ brew-package:
 # Update version placeholder in tap files (run after bumping Cargo.toml version).
 tap-update-version:
 	sed -i '' 's/version "[0-9]*\.[0-9]*\.[0-9]*"/version "$(VERSION)"/' \
-	  ../homebrew-privacyclaw/Formula/privacyclaw.rb \
-	  ../homebrew-privacyclaw/Casks/privacyclaw-app.rb
+	  homebrew-privacyclaw/Formula/privacyclaw.rb \
+	  homebrew-privacyclaw/Casks/privacyclaw-app.rb
 
 # Validate tap formula syntax (requires brew).
 tap-audit:
-	brew audit --strict ../homebrew-privacyclaw/Formula/privacyclaw.rb || true
-	brew audit --cask ../homebrew-privacyclaw/Casks/privacyclaw-app.rb || true
+	brew audit --strict homebrew-privacyclaw/Formula/privacyclaw.rb || true
+	brew audit --cask homebrew-privacyclaw/Casks/privacyclaw-app.rb || true
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
