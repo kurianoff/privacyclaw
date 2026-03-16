@@ -11,7 +11,7 @@
 
 use std::sync::Arc;
 use tokio::sync::Notify;
-use config::default_ca_dir;
+use crate::config::default_ca_dir;
 use tray_icon::{
     menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu},
     Icon, TrayIconBuilder,
@@ -23,66 +23,130 @@ struct Ids {
     open_dashboard: tray_icon::menu::MenuId,
     network_proxy:  tray_icon::menu::MenuId,
     pii_off:        tray_icon::menu::MenuId,
+    pii_detect:     tray_icon::menu::MenuId,
     pii_t1:         tray_icon::menu::MenuId,
     pii_t2:         tray_icon::menu::MenuId,
     pii_t3:         tray_icon::menu::MenuId,
+    pii_intelligent: tray_icon::menu::MenuId,
     quit:           tray_icon::menu::MenuId,
 }
 
 // ── Pure helpers (testable without a display) ─────────────────────────────────
 
-/// Returns the enabled/checked state for each PII submenu item based on
-/// the current `pii_mode` string.  Used both by `build_menu` and unit tests.
-pub fn pii_menu_states(pii_mode: &str) -> PiiMenuStates {
-    PiiMenuStates {
-        off_enabled:  pii_mode != "off",
-        t1_enabled:   pii_mode != "replace",
-        t2_enabled:   true,
-        t3_enabled:   true,
+/// Derive the active PII level string from `pii.mode` and `pii.tiers` fields in
+/// the JSON config returned by GET /api/config.
+///
+/// Returns one of: "off", "detect-only", "1", "2", "3", "intelligent".
+pub fn derive_pii_level(mode: &str, regex: bool, ner: bool, slm: bool) -> &'static str {
+    match mode {
+        "off" => "off",
+        "detect-only" => "detect-only",
+        "replace" => {
+            if regex && ner && slm {
+                "3"
+            } else if regex && ner && !slm {
+                "2"
+            } else if regex && !ner && !slm {
+                "1"
+            } else if !regex && !ner && slm {
+                "intelligent"
+            } else {
+                // Unexpected combination — treat as off to avoid stale check.
+                "off"
+            }
+        }
+        _ => "off",
     }
 }
 
-/// The enabled/checked booleans for the four PII submenu items.
+/// Returns the enabled/checked state for each PII submenu item based on
+/// the current derived `pii_level` string.  Used both by `build_menu` and unit tests.
+pub fn pii_menu_states(pii_level: &str) -> PiiMenuStates {
+    PiiMenuStates {
+        off_enabled:         pii_level != "off",
+        off_checked:         pii_level == "off",
+        detect_enabled:      pii_level != "detect-only",
+        detect_checked:      pii_level == "detect-only",
+        t1_enabled:          pii_level != "1",
+        t1_checked:          pii_level == "1",
+        t2_enabled:          pii_level != "2",
+        t2_checked:          pii_level == "2",
+        t3_enabled:          pii_level != "3",
+        t3_checked:          pii_level == "3",
+        intelligent_enabled: pii_level != "intelligent",
+        intelligent_checked: pii_level == "intelligent",
+    }
+}
+
+/// The enabled/checked booleans for the six PII submenu items.
 #[derive(Debug, PartialEq, Eq)]
 pub struct PiiMenuStates {
-    /// "Off" item is enabled (clickable) when mode ≠ "off".
-    pub off_enabled: bool,
-    /// "Tier 1 – Regex" item enabled when mode ≠ "replace".
-    pub t1_enabled: bool,
-    /// "Tier 2 – NER" always enabled.
-    pub t2_enabled: bool,
-    /// "Tier 3 – SLM" always enabled.
-    pub t3_enabled: bool,
+    pub off_enabled:         bool,
+    pub off_checked:         bool,
+    pub detect_enabled:      bool,
+    pub detect_checked:      bool,
+    pub t1_enabled:          bool,
+    pub t1_checked:          bool,
+    pub t2_enabled:          bool,
+    pub t2_checked:          bool,
+    pub t3_enabled:          bool,
+    pub t3_checked:          bool,
+    pub intelligent_enabled: bool,
+    pub intelligent_checked: bool,
+}
+
+/// Return the `--protection-level` argument for a menu item ID, or `None` if
+/// the ID does not belong to the PII submenu.
+fn pii_level_for_id<'a>(id: &tray_icon::menu::MenuId, ids: &Ids) -> Option<&'a str> {
+    if *id == ids.pii_off         { Some("off") }
+    else if *id == ids.pii_detect { Some("detect-only") }
+    else if *id == ids.pii_t1     { Some("1") }
+    else if *id == ids.pii_t2     { Some("2") }
+    else if *id == ids.pii_t3     { Some("3") }
+    else if *id == ids.pii_intelligent { Some("intelligent") }
+    else                           { None }
 }
 
 // ── Menu construction ─────────────────────────────────────────────────────────
 
-fn build_menu(network_proxy_on: bool, pii_mode: &str) -> (Menu, Ids) {
+fn build_menu(network_proxy_on: bool, pii_level: &str) -> (Menu, Ids) {
     let open_dashboard  = MenuItem::new("Open Dashboard", true, None);
 
     // HTTP proxy is always on while the `start` command is running.
     let http_proxy      = CheckMenuItem::new("HTTP Proxy", true, true, None);
     let network_proxy   = CheckMenuItem::new("Network Proxy", true, network_proxy_on, None);
 
-    // PII submenu — checked state reflects current pii_mode from config.
-    let states    = pii_menu_states(pii_mode);
-    let pii_sub   = Submenu::new("PII Protection", true);
-    let pii_off   = MenuItem::new("Off",              states.off_enabled, None);
-    let pii_t1    = MenuItem::new("Tier 1 — Regex",   states.t1_enabled,  None);
-    let pii_t2    = MenuItem::new("Tier 2 — NER",     states.t2_enabled,  None);
-    let pii_t3    = MenuItem::new("Tier 3 — SLM",     states.t3_enabled,  None);
-    let _ = pii_sub.append_items(&[&pii_off, &pii_t1, &pii_t2, &pii_t3]);
+    // PII submenu — checked state reflects current pii_level derived from config.
+    let states = pii_menu_states(pii_level);
+    let pii_sub = Submenu::new("PII Protection", true);
+    // CheckMenuItem::new(label, enabled, checked, accelerator)
+    let pii_off         = CheckMenuItem::new("Off",                      states.off_enabled,         states.off_checked,         None);
+    let pii_detect      = CheckMenuItem::new("Detect only",              states.detect_enabled,      states.detect_checked,      None);
+    let pii_t1          = CheckMenuItem::new("Tier 1 — Regex",           states.t1_enabled,          states.t1_checked,          None);
+    let pii_t2          = CheckMenuItem::new("Tier 2 — NER",             states.t2_enabled,          states.t2_checked,          None);
+    let pii_t3          = CheckMenuItem::new("Tier 3 — Full Pipeline",   states.t3_enabled,          states.t3_checked,          None);
+    let pii_intelligent = CheckMenuItem::new("Intelligent (T3 only)",    states.intelligent_enabled, states.intelligent_checked, None);
+    let _ = pii_sub.append_items(&[
+        &pii_off,
+        &pii_detect,
+        &pii_t1,
+        &pii_t2,
+        &pii_t3,
+        &pii_intelligent,
+    ]);
 
     let quit = MenuItem::new("Quit Privacyclaw", true, None);
 
     let ids = Ids {
-        open_dashboard: open_dashboard.id().clone(),
-        network_proxy:  network_proxy.id().clone(),
-        pii_off:        pii_off.id().clone(),
-        pii_t1:         pii_t1.id().clone(),
-        pii_t2:         pii_t2.id().clone(),
-        pii_t3:         pii_t3.id().clone(),
-        quit:           quit.id().clone(),
+        open_dashboard:  open_dashboard.id().clone(),
+        network_proxy:   network_proxy.id().clone(),
+        pii_off:         pii_off.id().clone(),
+        pii_detect:      pii_detect.id().clone(),
+        pii_t1:          pii_t1.id().clone(),
+        pii_t2:          pii_t2.id().clone(),
+        pii_t3:          pii_t3.id().clone(),
+        pii_intelligent: pii_intelligent.id().clone(),
+        quit:            quit.id().clone(),
     };
 
     let menu = Menu::new();
@@ -163,7 +227,7 @@ fn make_icon() -> Icon {
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
-/// §7.T6: `pii_menu_states(pii_mode)` returns correct enabled/checked states.
+/// §7.T6: `pii_menu_states(pii_level)` returns correct enabled/checked states.
 ///
 /// These tests run on all platforms without a display because `pii_menu_states`
 /// is a pure function that does not create any AppKit or tray-icon objects.
@@ -171,39 +235,125 @@ fn make_icon() -> Icon {
 mod tests {
     use super::*;
 
+    // ── derive_pii_level tests ──────────────────────────────────────────────
+
+    #[test]
+    fn derive_pii_level_off() {
+        assert_eq!(derive_pii_level("off", false, false, false), "off");
+    }
+
+    #[test]
+    fn derive_pii_level_detect_only() {
+        assert_eq!(derive_pii_level("detect-only", false, false, false), "detect-only");
+    }
+
+    #[test]
+    fn derive_pii_level_tier1() {
+        assert_eq!(derive_pii_level("replace", true, false, false), "1");
+    }
+
+    #[test]
+    fn derive_pii_level_tier2() {
+        assert_eq!(derive_pii_level("replace", true, true, false), "2");
+    }
+
+    #[test]
+    fn derive_pii_level_tier3() {
+        assert_eq!(derive_pii_level("replace", true, true, true), "3");
+    }
+
+    #[test]
+    fn derive_pii_level_intelligent() {
+        assert_eq!(derive_pii_level("replace", false, false, true), "intelligent");
+    }
+
+    // ── pii_menu_states tests ───────────────────────────────────────────────
+
     #[test]
     fn pii_menu_states_off_mode() {
         let s = pii_menu_states("off");
-        assert!(!s.off_enabled,  "mode=off → Off item should be disabled (already off)");
-        assert!(s.t1_enabled,    "mode=off → Tier 1 item should be enabled");
+        assert!(!s.off_enabled,  "level=off → Off item should be disabled (already active)");
+        assert!(s.off_checked,   "level=off → Off item should be checked");
+        assert!(s.detect_enabled);
+        assert!(!s.detect_checked);
+        assert!(s.t1_enabled);
+        assert!(!s.t1_checked);
         assert!(s.t2_enabled);
         assert!(s.t3_enabled);
+        assert!(s.intelligent_enabled);
     }
 
     #[test]
     fn pii_menu_states_detect_only_mode() {
         let s = pii_menu_states("detect-only");
-        assert!(s.off_enabled,   "mode=detect-only → Off item should be enabled");
-        assert!(s.t1_enabled,    "mode=detect-only → Tier 1 item should be enabled");
+        assert!(s.off_enabled,     "level=detect-only → Off item should be enabled");
+        assert!(!s.off_checked);
+        assert!(!s.detect_enabled, "level=detect-only → Detect only should be disabled (active)");
+        assert!(s.detect_checked,  "level=detect-only → Detect only should be checked");
+        assert!(s.t1_enabled);
+        assert!(!s.t1_checked);
         assert!(s.t2_enabled);
         assert!(s.t3_enabled);
+        assert!(s.intelligent_enabled);
     }
 
     #[test]
-    fn pii_menu_states_replace_mode() {
-        let s = pii_menu_states("replace");
-        assert!(s.off_enabled,   "mode=replace → Off item should be enabled");
-        assert!(!s.t1_enabled,   "mode=replace → Tier 1 item should be disabled (active)");
+    fn pii_menu_states_tier1() {
+        let s = pii_menu_states("1");
+        assert!(s.off_enabled);
+        assert!(!s.off_checked);
+        assert!(s.detect_enabled);
+        assert!(!s.t1_enabled,  "level=1 → Tier 1 should be disabled (active)");
+        assert!(s.t1_checked,   "level=1 → Tier 1 should be checked");
         assert!(s.t2_enabled);
+        assert!(!s.t2_checked);
         assert!(s.t3_enabled);
+        assert!(s.intelligent_enabled);
     }
 
     #[test]
-    fn pii_menu_states_unknown_mode_is_noop() {
-        // Unknown modes are treated the same as "detect-only" — everything enabled.
-        let s = pii_menu_states("something-else");
+    fn pii_menu_states_tier2() {
+        let s = pii_menu_states("2");
         assert!(s.off_enabled);
         assert!(s.t1_enabled);
+        assert!(!s.t2_enabled,  "level=2 → Tier 2 should be disabled (active)");
+        assert!(s.t2_checked,   "level=2 → Tier 2 should be checked");
+        assert!(s.t3_enabled);
+        assert!(s.intelligent_enabled);
+    }
+
+    #[test]
+    fn pii_menu_states_tier3() {
+        let s = pii_menu_states("3");
+        assert!(s.off_enabled);
+        assert!(s.t1_enabled);
+        assert!(s.t2_enabled);
+        assert!(!s.t3_enabled,  "level=3 → Tier 3 should be disabled (active)");
+        assert!(s.t3_checked,   "level=3 → Tier 3 should be checked");
+        assert!(s.intelligent_enabled);
+    }
+
+    #[test]
+    fn pii_menu_states_intelligent() {
+        let s = pii_menu_states("intelligent");
+        assert!(s.off_enabled);
+        assert!(s.t1_enabled);
+        assert!(s.t2_enabled);
+        assert!(s.t3_enabled);
+        assert!(!s.intelligent_enabled, "level=intelligent → Intelligent should be disabled (active)");
+        assert!(s.intelligent_checked,  "level=intelligent → Intelligent should be checked");
+    }
+
+    #[test]
+    fn pii_menu_states_unknown_level_all_enabled() {
+        // Unknown levels are treated as "off" — everything not-"off" is enabled.
+        let s = pii_menu_states("something-else");
+        assert!(s.off_enabled);
+        assert!(s.detect_enabled);
+        assert!(s.t1_enabled);
+        assert!(s.t2_enabled);
+        assert!(s.t3_enabled);
+        assert!(s.intelligent_enabled);
     }
 
     #[test]
@@ -258,7 +408,7 @@ fn pump_run_loop(secs: f64) {
         // NSDefaultRunLoopMode string
         let mode: Retained<AnyObject> =
             msg_send_id![class!(NSString), stringWithUTF8String:
-                b"kCFRunLoopDefaultMode\0".as_ptr() as *const i8];
+                c"kCFRunLoopDefaultMode".as_ptr()];
 
         // Drain all pending events up to `secs` timeout.
         loop {
@@ -279,7 +429,9 @@ fn pump_run_loop(secs: f64) {
 
 // ── Live config polling ───────────────────────────────────────────────────────
 
-/// Poll `GET /api/config` and return `(network_proxy_on, pii_mode)` if successful.
+/// Poll `GET /api/config` and return `(network_proxy_on, pii_level)` if successful.
+///
+/// `pii_level` is one of: "off", "detect-only", "1", "2", "3", "intelligent".
 ///
 /// Uses blocking I/O (acceptable on the tray main thread between run-loop pumps).
 /// Times out after 500 ms so a stale dashboard does not freeze the run loop.
@@ -311,9 +463,13 @@ fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
     let v: serde_json::Value = serde_json::from_str(body).ok()?;
 
     let network_on = v["proxy"]["network_enabled"].as_bool().unwrap_or(false);
-    let pii_mode   = v["pii"]["mode"].as_str().unwrap_or("off").to_string();
+    let pii_mode   = v["pii"]["mode"].as_str().unwrap_or("off");
+    let regex      = v["pii"]["tiers"]["regex"].as_bool().unwrap_or(false);
+    let ner        = v["pii"]["tiers"]["ner"].as_bool().unwrap_or(false);
+    let slm        = v["pii"]["tiers"]["slm"].as_bool().unwrap_or(false);
+    let pii_level  = derive_pii_level(pii_mode, regex, ner, slm).to_string();
 
-    Some((network_on, pii_mode))
+    Some((network_on, pii_level))
 }
 
 // ── Public API ────────────────────────────────────────────────────────────────
@@ -325,7 +481,7 @@ fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
 /// background threads) listens on the same `Notify` and shuts down.
 ///
 /// The tray polls `GET /api/config` every ~5 s (100 × 50 ms run-loop pumps)
-/// and rebuilds the menu if `network_proxy_on` or `pii_mode` have changed,
+/// and rebuilds the menu if `network_proxy_on` or `pii_level` have changed,
 /// so check-marks stay in sync with live config edits from the dashboard.
 pub fn run(
     dashboard_url:     String,
@@ -335,12 +491,15 @@ pub fn run(
     domains:           Vec<String>,
     proxy_port:        u16,
 ) {
-    let (menu, mut ids) = build_menu(network_proxy_on, &pii_mode);
+    // Derive the initial pii_level from the mode string alone (no tiers at
+    // startup — the first poll will refine it within 5 s).
+    let initial_pii_level = derive_pii_level(&pii_mode, true, false, false);
+    let (menu, mut ids) = build_menu(network_proxy_on, initial_pii_level);
     let icon = make_icon();
 
     // TrayIconBuilder on macOS initialises NSApplication internally (accessory
     // mode: no Dock icon).  The icon appears in the system status bar.
-    let mut tray = TrayIconBuilder::new()
+    let tray = TrayIconBuilder::new()
         .with_menu(Box::new(menu))
         .with_tooltip("Privacyclaw Privacy Proxy")
         .with_icon(icon)
@@ -349,8 +508,8 @@ pub fn run(
 
     let rx = MenuEvent::receiver();
 
-    let mut current_network_on = network_proxy_on;
-    let mut current_pii_mode   = pii_mode.clone();
+    let mut current_network_on  = network_proxy_on;
+    let mut current_pii_level   = initial_pii_level.to_string();
     // Poll counter: every 100 iterations × 50 ms ≈ 5 s between config polls.
     let mut poll_counter: u32 = 0;
 
@@ -364,10 +523,10 @@ pub fn run(
         if poll_counter >= 100 {
             poll_counter = 0;
             if let Some((new_net, new_pii)) = fetch_config_state(&dashboard_url) {
-                if new_net != current_network_on || new_pii != current_pii_mode {
+                if new_net != current_network_on || new_pii != current_pii_level {
                     current_network_on = new_net;
-                    current_pii_mode   = new_pii.clone();
-                    let (new_menu, new_ids) = build_menu(current_network_on, &current_pii_mode);
+                    current_pii_level  = new_pii.clone();
+                    let (new_menu, new_ids) = build_menu(current_network_on, &current_pii_level);
                     tray.set_menu(Some(Box::new(new_menu)));
                     ids = new_ids;
                 }
@@ -407,11 +566,14 @@ pub fn run(
                     }
                 });
 
-            } else if ev.id == ids.pii_off || ev.id == ids.pii_t1
-                   || ev.id == ids.pii_t2 || ev.id == ids.pii_t3 {
-                // Open dashboard Settings panel for PII config changes.
-                let url = format!("{}/settings", dashboard_url);
-                let _ = std::process::Command::new("open").arg(&url).spawn();
+            } else if let Some(level) = pii_level_for_id(&ev.id, &ids) {
+                let exe = std::env::current_exe().unwrap_or_default();
+                let level = level.to_string();
+                std::thread::spawn(move || {
+                    let _ = std::process::Command::new(exe)
+                        .args(["config", "--protection-level", &level])
+                        .spawn();
+                });
 
             } else if ev.id == ids.quit {
                 shutdown.notify_waiters();
