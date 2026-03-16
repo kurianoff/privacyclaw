@@ -22,7 +22,3 @@ dist/
 
 # External repos (managed separately)
 mitmproxy/
-
-# Stale pre-move subdirectory (no longer used)
-privacyclaw/
-!.claude/skills/privacyclaw/
