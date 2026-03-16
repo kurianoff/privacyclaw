@@ -331,6 +331,8 @@ pub fn run(
     network_proxy_on:  bool,
     pii_mode:          String,
     shutdown:          Arc<Notify>,
+    domains:           Vec<String>,
+    proxy_port:        u16,
 ) {
     let (menu, mut ids) = build_menu(network_proxy_on, &pii_mode);
     let icon = make_icon();
@@ -379,11 +381,23 @@ pub fn run(
                     .spawn();
 
             } else if ev.id == ids.network_proxy {
-                // Toggle network proxy via subprocess so it gets the admin dialog.
-                let enabled = crate::network_helper::is_enabled();
-                let arg = if enabled { "network-disable" } else { "network-enable" };
-                let exe = std::env::current_exe().unwrap_or_default();
-                let _ = std::process::Command::new(exe).arg(arg).spawn();
+                // Toggle network proxy in-process on a background thread.
+                // Running in-process ensures the tray's window-server connection
+                // is inherited by osascript, so the admin dialog appears correctly.
+                let domains2 = domains.clone();
+                let port2 = proxy_port;
+                std::thread::spawn(move || {
+                    let enabled = crate::network_helper::is_enabled();
+                    let result = if enabled {
+                        crate::network_helper::disable()
+                    } else {
+                        let d: Vec<&str> = domains2.iter().map(|s| s.as_str()).collect();
+                        crate::network_helper::enable(&d, port2)
+                    };
+                    if let Err(e) = result {
+                        tracing::warn!(err = %e, "network proxy toggle failed");
+                    }
+                });
 
             } else if ev.id == ids.pii_off || ev.id == ids.pii_t1
                    || ev.id == ids.pii_t2 || ev.id == ids.pii_t3 {
