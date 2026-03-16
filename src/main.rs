@@ -277,8 +277,15 @@ async fn async_main(cli: Cli) -> Result<()> {
 
 // ── Tray mode (macOS + `tray` feature) ───────────────────────────────────────
 
-/// Start proxy tasks on a background tokio runtime and run the tray icon on the
-/// main thread.  AppKit mandates that all UI runs on the main thread.
+/// Start permanent background tasks and run the tray icon on the main thread.
+///
+/// The dashboard, PII-vault eviction, and log-rotation tasks are spawned
+/// immediately and run for the lifetime of the process (unaffected by
+/// Start/Stop Proxy).  The HTTP CONNECT listener is managed by `tray::run()`
+/// via `TrayState`.
+///
+/// AppKit mandates that all UI runs on the main thread, so `tray::run()` blocks
+/// here until the user clicks "Quit Privacyclaw".
 #[cfg(all(target_os = "macos", feature = "tray"))]
 fn run_tray_mode(cli: Cli) -> Result<()> {
     let mut cfg = Config::load(cli.config.as_deref()).context("Failed to load config")?;
@@ -301,21 +308,14 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let (pii_flag, tray_mode) = match &cli.command {
-        Commands::Start { pii, mode, .. } => (*pii, mode.clone()),
+    let pii_flag = match &cli.command {
+        Commands::Start { pii, .. } => *pii,
         _ => unreachable!(),
     };
-    // When no --mode is given, tray mode defaults to All.
-    let tray_mode = tray_mode.unwrap_or(StartMode::All);
 
-    let dashboard_url    = format!("http://{}", cfg.proxy.dashboard);
-    let network_proxy_on = crate::network_helper::is_enabled();
-    let pii_mode         = cfg.pii.mode.clone();
-    let tray_domains: Vec<String> = cfg.intercept.domains.clone();
-    let tray_proxy_port: u16 = cfg.network_proxy.listen
-        .rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(16441);
+    let dashboard_url = format!("http://{}", cfg.proxy.dashboard);
 
-    // Shared shutdown: tray Quit → notified → tokio select! arm.
+    // Shared shutdown: tray Quit → notified → any listener on this Notify.
     let shutdown = Arc::new(Notify::new());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -323,20 +323,82 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
 
+    // ── Setup: load CA, open store, build caches ────────────────────────────
+    let ca_dir  = default_ca_dir();
+    let bundle  = ca::load_ca(&ca_dir)?
+        .context("CA not initialized. Run `privacyclaw init` first.")?;
+    let store   = storage::Store::open(&cfg.resolved_logs_dir())
+        .with_context(|| format!("Failed to open log dir: {:?}", cfg.resolved_logs_dir()))?;
+    tracing::info!(logs_dir = %cfg.resolved_logs_dir().display(), "store opened");
+
+    let cert_cache = ca::cert_gen::CertCache::new(bundle);
+    tracing::info!("cert cache initialised");
+
+    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
+
+    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
+    let cfg = Arc::new(cfg);
+    let cfg_mgr = ConfigManager::new((*cfg).clone(), Some(config_path));
+
+    // ── Permanent tasks (dashboard, PII eviction, log rotation) ────────────
     {
-        let cfg2      = cfg.clone();
-        let cfg_mgr   = ConfigManager::new(cfg, Some(config_path));
-        let shutdown2 = shutdown.clone();
+        let addr = cfg.proxy.dashboard.clone();
+        let proxy_state = dashboard::ProxyState::new();
+        let download_tracker = crate::models::DownloadTracker::new();
+        let (s, w, m, ps, dt) = (
+            store.clone(),
+            ws_tx.clone(),
+            cfg_mgr.clone(),
+            proxy_state,
+            download_tracker,
+        );
         rt.spawn(async move {
-            if let Err(e) = cmd_start(cfg2, cfg_mgr, pii_flag, Some(tray_mode), shutdown2).await {
-                tracing::error!(err = %e, "proxy error");
+            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt).await {
+                tracing::error!(err = %e, "dashboard error");
+            }
+        });
+        tracing::warn!(addr = %cfg.proxy.dashboard, "dashboard started (permanent)");
+    }
+
+    if let Some(ref p) = pii {
+        let registry = Arc::clone(&p.registry);
+        rt.spawn(async move {
+            let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
+            loop {
+                interval.tick().await;
+                registry.evict_expired();
             }
         });
     }
 
-    // Blocks until the user clicks "Quit Privacyclaw".
-    tray::run(dashboard_url, network_proxy_on, pii_mode, shutdown, tray_domains, tray_proxy_port);
+    {
+        let s = store.clone();
+        rt.spawn(rotation_loop(s));
+    }
 
+    // Write PID file now that permanent tasks are running.
+    if let Err(e) = pid::write_pid() {
+        tracing::warn!(err = %e, "failed to write PID file");
+    }
+
+    // ── Build TrayState and hand off to tray::run() ─────────────────────────
+    let state = tray::TrayState {
+        proxy_running:    false, // tray::run() calls start_proxy() on entry
+        http_listener_on: false,
+        http_task:        None,
+        cert_cache,
+        cfg,
+        cfg_mgr,
+        store,
+        ws_tx,
+        pii,
+        rt: rt.handle().clone(),
+    };
+
+    // Blocks until the user clicks "Quit Privacyclaw".
+    tray::run(dashboard_url, shutdown, state);
+
+    pid::remove_pid();
     rt.shutdown_timeout(Duration::from_secs(3));
     Ok(())
 }

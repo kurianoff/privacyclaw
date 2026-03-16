@@ -149,12 +149,34 @@ privacyclaw start --mode network
 
 Open `http://localhost:16443` for the live dashboard.
 
+## Tray icon (macOS)
+
+On macOS, build with the `tray` feature to run privacyclaw as a menu bar app:
+
+```sh
+cargo build --features tray
+privacyclaw start --tray
+```
+
+The tray icon shows proxy state at a glance:
+
+- **Green centre dot** — proxy running; HTTP CONNECT listener is active.
+- **Red centre dot** — proxy stopped; listener is down. The dashboard remains accessible even when the proxy is stopped.
+
+From the menu you can:
+
+- **Stop Proxy / Start Proxy** — toggle the HTTP CONNECT listener and network routing without quitting the app.
+- **HTTP Proxy** checkbox — independently toggle the CONNECT listener while the proxy remains "running".
+- **Network Proxy** checkbox — toggle pf rules and `/etc/hosts` (requires admin credentials).
+- **Open Dashboard** — open the web dashboard in the browser (always available).
+
 ## Commands
 
 | Command | Description |
 | --- | --- |
 | `privacyclaw init [--install-ca]` | Generate CA; optionally install into OS trust store |
 | `privacyclaw start` | Start CONNECT proxy (`:16440`) + dashboard (`:16443`) |
+| `privacyclaw start --tray` | Start as macOS menu bar app (requires `tray` feature) |
 | `privacyclaw start --mode network` | Start network proxy (`:16441`) + dashboard (`:16443`) |
 | `privacyclaw start --mode all` | Start both proxies + dashboard |
 | `privacyclaw setup-network` | Print `/etc/hosts` + pf rules for network mode |
