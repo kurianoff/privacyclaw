@@ -105,3 +105,21 @@ For next (Testing):
 
 Open: none
 === END HANDOFF ===
+
+## Phase 4 — Testing
+
+=== PHASE HANDOFF ===
+Phase:     Testing
+Status:    complete
+Feature:   Privacyclaw Tray Improvements — icon status, Start/Stop Proxy, dashboard-always-running, HTTP Proxy toggle, docs update
+Branch:    feature/tray-improvements
+Artifacts:
+  src/tray.rs (34 tray tests total, 30 new)
+Decisions:
+  - 30 new tests added covering: derive_pii_level, pii_menu_states, generate_icon_rgba, build_menu label, proxy toggle guards, fetch_config_state URL parsing.
+  - 2 pre-existing brew_formula_test failures excluded — external-repo-dependency failures, unrelated to this feature.
+  - start_proxy/stop_proxy lifecycle not unit-testable without real tokio runtime + store + CA.
+
+For next: Feature branch is ready to merge to main.
+Open: none
+=== END HANDOFF ===
