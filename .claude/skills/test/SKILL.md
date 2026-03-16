@@ -1,12 +1,6 @@
 ---
 name: test
-description: >
-  Run Phase 4 (Testing) of the privacyclaw feature workflow. PM and Architect
-  decide which test types are needed; Test Developer implements them; Stress
-  Tester adds load/concurrency tests if required; Test Runner gates completion.
-  If Test Runner uncovers implementation bugs, the affected tasks are re-run
-  through Phase 3 before testing resumes. Can be invoked standalone by passing
-  a Development Phase Handoff as the argument.
+description: Run Phase 4 (Testing) of the privacyclaw feature workflow. PM and Architect decide test types; Test Developer implements them; Stress Tester adds load tests if needed; Test Runner gates completion. Implementation bugs route back through Phase 3. Can be invoked standalone by passing a Development Phase Handoff as the argument.
 argument-hint: <develop phase handoff>
 context: fork
 disable-model-invocation: true

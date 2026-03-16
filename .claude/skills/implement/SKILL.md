@@ -1,11 +1,6 @@
 ---
 name: implement
-description: >
-  Orchestrate the full 4-phase feature development workflow for this project:
-  Design → Planning → Development → Testing. Invoke with a plain-English
-  feature description. Each phase runs in an isolated skill context; the
-  orchestrator passes a compact handoff between phases and surfaces any
-  decisions that require user input.
+description: Orchestrate the full 4-phase feature development workflow (Design → Planning → Development → Testing). Invoke with a plain-English feature description; the orchestrator passes compact handoffs between phases and surfaces decisions that require user input.
 argument-hint: <feature description>
 disable-model-invocation: true
 allowed-tools: Bash, Skill, Read, Write

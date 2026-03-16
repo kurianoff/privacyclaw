@@ -1,10 +1,6 @@
 ---
 name: design
-description: >
-  Run Phase 1 (Design) of the privacyclaw feature workflow. Coordinates
-  Architect, Investigator, and Contrarian to produce a stable Design Document.
-  Can be invoked standalone for design exploration or as part of
-  /privacyclaw:implement.
+description: Run Phase 1 (Design) of the privacyclaw feature workflow. Coordinates Architect, Investigator, and Contrarian to produce a stable Design Document. Can be invoked standalone or as part of /privacyclaw:implement.
 argument-hint: <feature description> [BRANCH: feature/<slug>]
 context: fork
 disable-model-invocation: true

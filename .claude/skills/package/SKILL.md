@@ -1,10 +1,6 @@
 ---
 name: package
-description: >
-  Orchestrate the full privacyclaw packaging workflow. Asks the user for branch,
-  target environment (dev/prod/both), and version bump type (major/minor/patch),
-  then ensures a clean tree, runs tests, bumps the version, invokes the
-  appropriate packager agent(s), commits, tags, and uploads release artifacts.
+description: Orchestrate the privacyclaw packaging workflow. Asks for branch, target environment (dev/prod/both), and version bump type (major/minor/patch), then ensures a clean tree, runs tests, bumps the version, invokes the appropriate packager agent(s), commits, tags, and uploads release artifacts.
 argument-hint: (no arguments needed — skill asks interactively)
 context: fork
 disable-model-invocation: true

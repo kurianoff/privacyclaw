@@ -1,10 +1,6 @@
 ---
 name: plan
-description: >
-  Run Phase 2 (Planning) of the privacyclaw feature workflow. Coordinates PM,
-  Architect, Investigator, and Contrarian to produce a validated OpenSpec task
-  list from a completed Design Document. Can be invoked standalone by passing
-  a Design Phase Handoff as the argument.
+description: Run Phase 2 (Planning) of the privacyclaw feature workflow. Coordinates PM, Architect, Investigator, and Contrarian to produce a validated OpenSpec task list from a Design Document. Can be invoked standalone by passing a Design Phase Handoff as the argument.
 argument-hint: <design phase handoff>
 context: fork
 disable-model-invocation: true
