@@ -52,6 +52,13 @@ Specialised Claude Code sub-agents are defined in `.claude/agents/`. Invoke them
 | --- | --- |
 | **pm** | Create an OpenSpec change proposal, write documentation, or produce a task checklist. |
 
+### Packaging
+
+| Agent | When to use |
+| --- | --- |
+| **dev-packager** | Build a local dev package (debug + `--features tray`). Produces a `file://` Homebrew tarball and an unsigned `.pkg`. Invoked by `/privacyclaw:package`. |
+| **prod-packager** | Build a production release (universal arm64+x86_64, `--features tray`). Produces signed/notarized `.pkg`, per-arch Homebrew tarballs, and pushes the updated tap formula to the tap repo. Invoked by `/privacyclaw:package`. |
+
 ## Feature development workflow
 
 Use `/privacyclaw:implement "description"` to run the full 4-phase workflow:
@@ -61,4 +68,21 @@ Use `/privacyclaw:implement "description"` to run the full 4-phase workflow:
 3. **Development** — Developer implements each task; Refactoring Engineer, Simplifier, and Logging Implementer polish it; Contrarian approves.
 4. **Testing** — Test Developer and Stress Tester write tests; Test Runner gates completion.
 
-See `.claude/commands/new-feature.md` for the full orchestration protocol.
+Skills live in `.claude/skills/privacyclaw/`. Each phase is also independently
+invocable: `/privacyclaw:design`, `/privacyclaw:plan`, `/privacyclaw:develop`,
+`/privacyclaw:test`. Each phase runs in an isolated `context: fork` to prevent
+context exhaustion across the full workflow.
+
+## Packaging workflow
+
+Use `/privacyclaw:package` to build and release a new version. The skill asks
+three questions interactively (branch, target env, version bump type), then:
+
+1. Checks the working tree is clean (prompts before committing if not)
+2. Runs `cargo test` — aborts on any failure
+3. Bumps the version in `Cargo.toml` and tap files
+4. Invokes `dev-packager`, `prod-packager`, or both in parallel
+5. Verifies all artifacts on disk before committing anything
+6. Commits version bump, creates and pushes git tag `v<VERSION>`
+7. Uploads `.pkg` and tarballs to a GitHub Release (prod only)
+8. Pulls local to match the new tag
