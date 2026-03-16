@@ -72,6 +72,11 @@ PKG_SCRIPTS := $(DIST)/pkg-scripts
 PKG_NAME    := privacyclaw-$(VERSION).pkg
 SHARE_DIR   := $(PKG_ROOT)/usr/local/share/privacyclaw
 
+# LLAMA_SERVER — path to the llama-server binary to bundle into the .pkg.
+# Defaults to the Homebrew-installed copy; override on the command line:
+#   make pkg LLAMA_SERVER=/path/to/llama-server
+LLAMA_SERVER ?= $(shell brew --prefix llama.cpp 2>/dev/null)/bin/llama-server
+
 # Shared pkg layout step (binary must already be at $(DIST)/privacyclaw).
 _pkg-layout:
 	rm -rf $(PKG_ROOT) $(PKG_SCRIPTS) $(DIST)/$(PKG_NAME)
@@ -79,6 +84,12 @@ _pkg-layout:
 	cp $(DIST)/privacyclaw $(PKG_ROOT)/usr/local/bin/privacyclaw
 	cp packaging/com.privacyclaw.proxy.plist $(SHARE_DIR)/
 	cp packaging/com.privacyclaw.pf.plist    $(SHARE_DIR)/
+	@if [ -f "$(LLAMA_SERVER)" ]; then \
+	  cp "$(LLAMA_SERVER)" $(SHARE_DIR)/llama-server; \
+	  echo "Bundled llama-server from $(LLAMA_SERVER)"; \
+	else \
+	  echo "WARN: llama-server not found at $(LLAMA_SERVER) — Tier 3 PII will not be bundled"; \
+	fi
 	cp packaging/postinstall $(PKG_SCRIPTS)/postinstall
 	cp packaging/preremove   $(PKG_SCRIPTS)/preremove
 	chmod +x $(PKG_SCRIPTS)/postinstall $(PKG_SCRIPTS)/preremove

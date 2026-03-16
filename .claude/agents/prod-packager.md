@@ -136,20 +136,59 @@ Record both SHAs — required in Step 7.
 
 ---
 
-## Step 5 — Build .pkg installer
+## Step 5 — Download and bundle llama-server
+
+The .pkg must include `llama-server` so Tier 3 PII works without Homebrew.
+Download the latest release binary for the target architecture from the
+llama.cpp GitHub releases. The universal .pkg is arm64-primary, so download
+the arm64 binary.
 
 ```bash
-make pkg
+# Fetch the latest llama.cpp release tag.
+LLAMA_TAG=$(gh release view --repo ggml-org/llama.cpp --json tagName -q .tagName)
+echo "llama.cpp latest release: $LLAMA_TAG"
+
+# Download the macOS arm64 binary archive.
+LLAMA_ASSET="llama-${LLAMA_TAG}-bin-macos-arm64.zip"
+gh release download "$LLAMA_TAG" \
+  --repo ggml-org/llama.cpp \
+  --pattern "$LLAMA_ASSET" \
+  --dir /tmp/llama-download/ \
+  --clobber
+
+# Extract llama-server from the archive.
+unzip -o "/tmp/llama-download/$LLAMA_ASSET" "llama-server" -d /tmp/llama-download/
+LLAMA_SERVER="/tmp/llama-download/llama-server"
+chmod 755 "$LLAMA_SERVER"
+
+# Verify it runs.
+"$LLAMA_SERVER" --version 2>/dev/null || "$LLAMA_SERVER" --help &>/dev/null || \
+  echo "WARN: llama-server smoke test inconclusive (expected on mismatched arch)"
+
+echo "llama-server ready: $LLAMA_SERVER"
 ```
 
-This uses the universal binary already in `dist/privacyclaw`.
+If the download fails (e.g. asset name changed): check
+`gh release view --repo ggml-org/llama.cpp` for the correct asset name,
+then retry. Do not skip this step — record the failure if it cannot be resolved.
+
+---
+
+## Step 6 — Build .pkg installer
+
+```bash
+make pkg LLAMA_SERVER="$LLAMA_SERVER"
+```
+
+This uses the universal binary already in `dist/privacyclaw` and bundles
+`llama-server` from the path provided.
 Output: `dist/privacyclaw-<VERSION>.pkg`
 
 Verify the file exists after make exits.
 
 ---
 
-## Step 6 — Sign .pkg (if certificate available)
+## Step 7 — Sign .pkg (if certificate available)
 
 If `SIGN_PKG` is non-empty:
 
@@ -167,7 +206,7 @@ If `SIGN_PKG` is empty: `PKG_FINAL="dist/privacyclaw-${VERSION}.pkg"` (unsigned)
 
 ---
 
-## Step 7 — Notarize .pkg (if credentials available)
+## Step 8 — Notarize .pkg (if credentials available)
 
 If `NOTARIZE=true`:
 
@@ -186,7 +225,7 @@ If `NOTARIZE=false`: skip and record warning in manifest.
 
 ---
 
-## Step 8 — Update Homebrew tap formula
+## Step 9 — Update Homebrew tap formula
 
 Edit `homebrew-privacyclaw/Formula/privacyclaw.rb` using `Read` + `Edit` tools.
 
@@ -211,7 +250,7 @@ the `.dmg` artifacts are included in the release.
 
 ---
 
-## Step 9 — Push tap formula to the homebrew-privacyclaw GitHub repo
+## Step 10 — Push tap formula to the homebrew-privacyclaw GitHub repo
 
 The tap files live inside `kladovka` for editing convenience, but Homebrew
 requires them in a separate repo (`github.com/kurianoff/homebrew-privacyclaw`).

@@ -102,7 +102,26 @@ whole file.
 
 ---
 
-## Step 5 — Build .pkg installer (debug)
+## Step 5 — Locate llama-server for bundling
+
+Tier 3 PII requires `llama-server`. Find it from the local Homebrew installation:
+
+```bash
+LLAMA_SERVER="$(brew --prefix llama.cpp 2>/dev/null)/bin/llama-server"
+if [ -f "$LLAMA_SERVER" ]; then
+    echo "llama-server found: $LLAMA_SERVER"
+else
+    echo "WARN: llama-server not found — Tier 3 PII will not work after install"
+    echo "      Install with: brew install llama.cpp"
+    LLAMA_SERVER=""
+fi
+```
+
+Record whether llama-server was found — report in the manifest.
+
+---
+
+## Step 6 — Build .pkg installer (debug)
 
 Use the debug binary already in `dist/privacyclaw`. Run pkgbuild directly so
 this step is independent of `make pkg`, which always does a release build.
@@ -119,6 +138,14 @@ mkdir -p "${PKG_ROOT}/usr/local/bin" "$SHARE_DIR" "$PKG_SCRIPTS"
 cp dist/privacyclaw "${PKG_ROOT}/usr/local/bin/privacyclaw"
 cp packaging/com.privacyclaw.proxy.plist "$SHARE_DIR/"
 cp packaging/com.privacyclaw.pf.plist    "$SHARE_DIR/"
+
+# Bundle llama-server if found.
+if [ -n "$LLAMA_SERVER" ] && [ -f "$LLAMA_SERVER" ]; then
+    cp "$LLAMA_SERVER" "$SHARE_DIR/llama-server"
+    chmod 755 "$SHARE_DIR/llama-server"
+    echo "Bundled llama-server into pkg"
+fi
+
 cp packaging/postinstall "$PKG_SCRIPTS/postinstall"
 cp packaging/preremove   "$PKG_SCRIPTS/preremove"
 chmod +x "$PKG_SCRIPTS/postinstall" "$PKG_SCRIPTS/preremove"
@@ -142,7 +169,7 @@ sudo installer -pkg dist/privacyclaw-<VERSION>-dev.pkg -target /
 
 ---
 
-## Step 6 — Cleanup staging files
+## Step 7 — Cleanup staging files
 
 ```bash
 rm -rf dist/pkg-root-dev dist/pkg-scripts-dev
