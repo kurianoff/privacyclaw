@@ -3,7 +3,6 @@ name: develop
 description: Run Phase 3 (Development) of the privacyclaw feature workflow. Implements every task from the OpenSpec plan using isolated worktrees, with Developer → Refactoring Engineer → Simplifier → Logging Implementer → Contrarian review per task. Can be invoked standalone by passing a Planning Phase Handoff as the argument.
 argument-hint: <plan phase handoff>
 context: fork
-disable-model-invocation: true
 ---
 
 # Phase 3 — Development
