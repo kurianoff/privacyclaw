@@ -207,11 +207,13 @@ pub fn enable(domains: &[&str], proxy_port: u16) -> Result<()> {
     );
 
     let anchor_path = "/etc/pf.anchors/privacyclaw";
+    // /etc/hosts write is independent of pf success (use `;` not `&&` before it)
+    // so that DNS-level interception always takes effect even if pfctl fails.
     let script = format!(
         "printf '{anchor}' > {anchor_path} && \
          printf '{pf_conf}' > /etc/pf.conf && \
          pfctl -ef /etc/pf.conf 2>/dev/null; \
-         pfctl -a privacyclaw -f {anchor_path} && \
+         pfctl -a privacyclaw -f {anchor_path} 2>/dev/null; \
          printf '{hosts}' >> /etc/hosts",
         anchor = pf_anchor.replace('\'', "'\\''"),
         anchor_path = anchor_path,

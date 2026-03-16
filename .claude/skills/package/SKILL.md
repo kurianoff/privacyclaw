@@ -5,7 +5,7 @@ argument-hint: (no arguments needed — skill asks interactively)
 context: fork
 ---
 
-# Orchestrator — privacyclaw:package
+# Orchestrator — package
 
 You are the **packaging orchestrator**. Your sole job is to run the packaging
 workflow safely and in the correct order. You do not build anything yourself —

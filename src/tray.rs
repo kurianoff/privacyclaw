@@ -435,6 +435,28 @@ fn pump_run_loop(secs: f64) {
 ///
 /// Uses blocking I/O (acceptable on the tray main thread between run-loop pumps).
 /// Times out after 500 ms so a stale dashboard does not freeze the run loop.
+fn patch_network_enabled(dashboard_url: &str, enabled: bool) {
+    use std::io::Write;
+    use std::net::TcpStream;
+    use std::time::Duration;
+
+    let host_port = dashboard_url
+        .trim_start_matches("http://")
+        .trim_start_matches("https://");
+
+    let body = format!("{{\"network_proxy\":{{\"enabled\":{}}}}}", enabled);
+    let request = format!(
+        "PATCH /api/config HTTP/1.0\r\nHost: {host_port}\r\nContent-Type: application/json\r\n\
+         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+
+    if let Ok(mut stream) = TcpStream::connect(host_port) {
+        stream.set_write_timeout(Some(Duration::from_millis(500))).ok();
+        let _ = stream.write_all(request.as_bytes());
+    }
+}
+
 fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
     use std::io::{Read, Write};
     use std::net::TcpStream;
@@ -546,11 +568,15 @@ pub fn run(
                 // is inherited by osascript, so the admin dialog appears correctly.
                 let domains2 = domains.clone();
                 let port2 = proxy_port;
+                let dashboard2 = dashboard_url.clone();
                 std::thread::spawn(move || {
                     let enabled = crate::network_helper::is_enabled();
                     let result = if enabled {
                         let r = crate::network_helper::disable();
-                        if r.is_ok() { crate::launchctl_unset_node_ca(); }
+                        if r.is_ok() {
+                            crate::launchctl_unset_node_ca();
+                            patch_network_enabled(&dashboard2, false);
+                        }
                         r
                     } else {
                         let d: Vec<&str> = domains2.iter().map(|s| s.as_str()).collect();
@@ -558,6 +584,7 @@ pub fn run(
                         if r.is_ok() {
                             let ca_pem = crate::ca::ca_cert_path(&default_ca_dir());
                             crate::launchctl_set_node_ca(&ca_pem);
+                            patch_network_enabled(&dashboard2, true);
                         }
                         r
                     };
@@ -576,6 +603,14 @@ pub fn run(
                 });
 
             } else if ev.id == ids.quit {
+                // Unload the LaunchAgent before exiting so launchd (KeepAlive=true)
+                // does not restart the process immediately.
+                if let Ok(out) = std::process::Command::new("id").arg("-u").output() {
+                    let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    let _ = std::process::Command::new("launchctl")
+                        .args(["bootout", &format!("gui/{uid}/com.privacyclaw.proxy")])
+                        .status();
+                }
                 shutdown.notify_waiters();
                 return;
             }

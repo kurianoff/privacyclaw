@@ -5,7 +5,7 @@ argument-hint: <feature description>
 allowed-tools: Bash, Skill, Read, Write
 ---
 
-# Orchestrator — privacyclaw:implement
+# Orchestrator — implement
 
 You are the **workflow orchestrator**. Your job is narrow: set up git, invoke
 each phase skill in order, pass compact handoffs between them, maintain the
@@ -30,8 +30,8 @@ This orchestrator was designed with the following constraints in mind:
   transcripts — to the next phase as `$ARGUMENTS`. Artifact paths (design doc,
   OpenSpec files) let subsequent phases read what they need directly.
 
-- **Independent phase invocability.** Each phase skill (`/privacyclaw:design`,
-  `/privacyclaw:plan`, `/privacyclaw:develop`, `/privacyclaw:test`) can be
+- **Independent phase invocability.** Each phase skill (`/design`,
+  `/plan`, `/develop`, `/test`) can be
   invoked standalone. This supports resuming a workflow mid-phase, re-running
   testing after a hotfix, or running design exploration without committing to
   full implementation.
@@ -85,7 +85,7 @@ merges to `main` only after Phase 4 passes completely.
 ## Step 2 — Invoke Phase 1: Design
 
 ```text
-Skill("privacyclaw:design", "<feature description>\nBRANCH: feature/<slug>")
+Skill("design", "<feature description>\nBRANCH: feature/<slug>")
 ```
 
 Wait for the Phase Handoff. Append it to `.claude/workflow/<slug>/phase-log.md`.
@@ -100,7 +100,7 @@ wait for a response before continuing.
 Pass the Design handoff as context:
 
 ```text
-Skill("privacyclaw:plan", "<design handoff content>")
+Skill("plan", "<design handoff content>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -114,7 +114,7 @@ If blocked, surface to user and wait.
 Pass the Planning handoff as context:
 
 ```text
-Skill("privacyclaw:develop", "<plan handoff content>")
+Skill("develop", "<plan handoff content>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -129,7 +129,7 @@ loop exceeded a threshold), surface the issue to the user before continuing.
 Pass the Development handoff as context:
 
 ```text
-Skill("privacyclaw:test", "<develop handoff content>")
+Skill("test", "<develop handoff content>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
