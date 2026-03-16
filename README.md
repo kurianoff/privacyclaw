@@ -91,7 +91,7 @@ EOF
 sudo pfctl -ef /etc/pf.conf
 ```
 
-For Node.js apps (including Claude Code), also set:
+For Node.js apps (including Claude Code CLI), also set:
 
 ```sh
 export NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/privacyclaw/ca/ca.pem"
@@ -99,6 +99,20 @@ export NODE_EXTRA_CA_CERTS="$HOME/Library/Application Support/privacyclaw/ca/ca.
 
 Node.js ignores the macOS system keychain and requires this variable explicitly.
 Add it to `~/.zshrc` to make it permanent.
+
+#### Claude Code in VSCode
+
+The VSCode extension spawns Claude Code in a sandboxed environment that does not inherit shell variables. Add the CA via VSCode settings instead:
+
+```json
+// settings.json
+"claudeCode.environmentVariables": [
+  { "name": "NODE_EXTRA_CA_CERTS", "value": "/Users/<you>/Library/Application Support/privacyclaw/ca/ca.pem" },
+  { "name": "SSL_CERT_FILE",        "value": "/Users/<you>/Library/Application Support/privacyclaw/ca/ca.pem" }
+]
+```
+
+Replace `<you>` with your macOS username. The CA path is also printed by `privacyclaw init`.
 
 ### IPv6 — important caveat
 
