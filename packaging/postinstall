@@ -42,6 +42,19 @@ else
         launchctl asuser "$USER_ID" su -m "$ACTUAL_USER" -c "\"$BINARY\" init"
 fi
 
+# ── Bundle llama-server into user bin dir ─────────────────────────────────────
+LLAMA_SRC="$SHARE_DIR/llama-server"
+LLAMA_DEST="$USER_HOME/Library/Application Support/privacyclaw/bin/llama-server"
+
+if [ -f "$LLAMA_SRC" ]; then
+    mkdir -p "$(dirname "$LLAMA_DEST")"
+    cp "$LLAMA_SRC" "$LLAMA_DEST"
+    chmod 755 "$LLAMA_DEST"
+    echo "[privacyclaw] llama-server installed to $LLAMA_DEST"
+else
+    echo "[privacyclaw] WARNING: llama-server not bundled — Tier 3 PII requires llama-server. Run: brew install llama.cpp"
+fi
+
 # Fix ownership of the entire privacyclaw data dir (handles reinstall cases).
 chown -R "$ACTUAL_USER" "$USER_HOME/Library/Application Support/privacyclaw" 2>/dev/null || true
 

@@ -311,6 +311,9 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
     let dashboard_url    = format!("http://{}", cfg.proxy.dashboard);
     let network_proxy_on = crate::network_helper::is_enabled();
     let pii_mode         = cfg.pii.mode.clone();
+    let tray_domains: Vec<String> = cfg.intercept.domains.clone();
+    let tray_proxy_port: u16 = cfg.network_proxy.listen
+        .rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or(16441);
 
     // Shared shutdown: tray Quit → notified → tokio select! arm.
     let shutdown = Arc::new(Notify::new());
@@ -332,7 +335,7 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
     }
 
     // Blocks until the user clicks "Quit Privacyclaw".
-    tray::run(dashboard_url, network_proxy_on, pii_mode, shutdown);
+    tray::run(dashboard_url, network_proxy_on, pii_mode, shutdown, tray_domains, tray_proxy_port);
 
     rt.shutdown_timeout(Duration::from_secs(3));
     Ok(())
@@ -820,7 +823,7 @@ async fn cmd_stop() -> Result<()> {
 /// Set NODE_EXTRA_CA_CERTS in the current launchd session and persist it via a
 /// LaunchAgent plist so GUI apps (VSCode / Electron) inherit it across reboots.
 #[cfg(target_os = "macos")]
-fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
+pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
     let ca_str = ca_pem.display().to_string();
 
     // Set for the current session.
@@ -893,7 +896,7 @@ fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
 
 /// Undo NODE_EXTRA_CA_CERTS: unset from current session and remove the LaunchAgent plist.
 #[cfg(target_os = "macos")]
-fn launchctl_unset_node_ca() {
+pub(crate) fn launchctl_unset_node_ca() {
     match std::process::Command::new("launchctl")
         .args(["unsetenv", "NODE_EXTRA_CA_CERTS"])
         .status()
