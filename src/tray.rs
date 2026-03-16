@@ -237,24 +237,42 @@ mod tests {
     }
 }
 
-/// Pump the macOS main-thread CFRunLoop for up to `secs` seconds.
+/// Pump the macOS AppKit event loop for up to `secs` seconds.
 ///
-/// AppKit delivers menu-click callbacks via the main-thread run loop.  Without
-/// pumping it the `MenuEvent` channel would never receive events.  We link
-/// against `CoreFoundation` (always present on macOS) and call
-/// `CFRunLoopRunInMode` directly to avoid pulling in an extra Rust crate.
+/// NSStatusItem click events are dispatched via NSApplication's event queue,
+/// not the bare CoreFoundation run loop.  We must call
+/// `[NSApp nextEventMatchingMask:untilDate:inMode:dequeue:]` + `sendEvent:`
+/// to deliver menu-click callbacks to the `MenuEvent` channel.
 fn pump_run_loop(secs: f64) {
-    #[link(name = "CoreFoundation", kind = "framework")]
-    extern "C" {
-        static kCFRunLoopDefaultMode: *const std::ffi::c_void;
-        fn CFRunLoopRunInMode(
-            mode: *const std::ffi::c_void,
-            seconds: f64,
-            return_after_source_handled: u8,
-        ) -> i32;
-    }
+    use objc2::rc::Retained;
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send_id, msg_send};
+
     unsafe {
-        CFRunLoopRunInMode(kCFRunLoopDefaultMode, secs, 0);
+        // NSEventMaskAny = u64::MAX
+        let app: Retained<AnyObject> =
+            msg_send_id![class!(NSApplication), sharedApplication];
+        let until: Retained<AnyObject> =
+            msg_send_id![class!(NSDate), dateWithTimeIntervalSinceNow: secs];
+        // NSDefaultRunLoopMode string
+        let mode: Retained<AnyObject> =
+            msg_send_id![class!(NSString), stringWithUTF8String:
+                b"kCFRunLoopDefaultMode\0".as_ptr() as *const i8];
+
+        // Drain all pending events up to `secs` timeout.
+        loop {
+            let event: Option<Retained<AnyObject>> = msg_send_id![
+                &*app,
+                nextEventMatchingMask: u64::MAX,
+                untilDate: &*until,
+                inMode: &*mode,
+                dequeue: true
+            ];
+            match event {
+                Some(ev) => { let _: () = msg_send![&*app, sendEvent: &*ev]; }
+                None => break,
+            }
+        }
     }
 }
 

@@ -2336,6 +2336,7 @@ dependencies = [
  "hyper-util",
  "indicatif",
  "ndarray",
+ "objc2 0.5.2",
  "ort",
  "rand",
  "rcgen",

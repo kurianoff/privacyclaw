@@ -203,7 +203,37 @@ new version — it must be committed alongside `Cargo.toml`.
 
 ---
 
-## Step 9 — Create and push git tag
+## Step 9 — Update changelog, create and push git tag
+
+### Update CHANGELOG.md
+
+Before tagging, prepend a new entry to `CHANGELOG.md` (create the file if it does not exist):
+
+```markdown
+## v<VERSION> — <YYYY-MM-DD>
+
+### Target: <TARGET>
+
+<one-line summary of what changed — derive from the git log since the previous tag>
+
+### Artifacts
+<list artifact filenames from the manifest>
+```
+
+To get the git log since the previous tag:
+```bash
+git log $(git describe --tags --abbrev=0 2>/dev/null || git rev-list --max-parents=0 HEAD)..HEAD --oneline
+```
+
+Commit the changelog alongside the version bump **in the same commit as Step 8** — go back and amend Step 8's staged files to include `CHANGELOG.md`:
+
+```bash
+git add CHANGELOG.md
+git commit --amend --no-edit
+git push origin <BRANCH> --force-with-lease
+```
+
+### Create and push git tag
 
 ```bash
 git tag "v${VERSION}"
