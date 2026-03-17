@@ -1,148 +1,128 @@
 ---
 name: refactor
-description: Systematically improve code structure in a targeted scope without changing behavior. Investigator catalogs smells → Contrarian challenges the catalog → Architect plans tasks → Contrarian challenges the plan → per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) with revert protocol if behavior breaks. Standalone skill — not part of the implement flow.
+description: Orchestrate the full refactoring workflow (Catalog → Blueprint → Execute). Investigator + Contrarian catalog structural smells, Architect + Contrarian produce a task list, then a per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) executes each one with a revert protocol. Standalone skill — not part of the implement flow.
+argument-hint: "<scope> [DO NOT TOUCH: <boundaries>] [RESUME_FROM: catalog|blueprint|execute|task-<id>] [SLUG: <existing-slug>]"
 context: fork
-argument-hint: <scope description> [DO NOT TOUCH: <comma-separated boundaries>]
 ---
 
-# Refactor
+# Orchestrator — refactor
 
-You are the **refactor coordinator**. Your job is to systematically improve the
-structure of a targeted scope of code — without changing observable behavior —
-and to leave every touched path fully instrumented with 5-level structured
-logging.
+You are the **refactor orchestrator**. Your job is narrow: set up git, invoke
+each phase skill in order, pass compact handoffs between them, maintain the
+Phase Log, and surface decisions to the user at the two mandatory gates. You
+do not catalog, plan, or implement anything yourself.
 
 Input: **$ARGUMENTS**
 
 Extract from the input:
-- `scope`: the code area to refactor (module, file, directory, or feature area)
-- `boundaries`: explicit "do not touch" zones (e.g. public API signatures, wire
-  protocol, serialization format). Record as `none` if omitted.
+- `scope`: the code area to refactor
+- `boundaries`: "DO NOT TOUCH" zones. Record as `none` if omitted.
+- `RESUME_FROM`: optional — `catalog`, `blueprint`, `execute`, or `task-<id>`
+- `SLUG`: required when resuming — the existing run's slug
 
 Derive a slug from the scope (lowercase, hyphens, max 40 chars).
-
-**Inject into every agent's context throughout this skill:**
-- The `scope` being refactored
-- The `boundaries` (do not touch list)
-- The branch name (`refactor/<slug>`)
+When resuming, use the provided `SLUG` — do not re-derive it.
 
 ---
 
-## Critical: refactor log
+## Design notes
 
-**Maintain a running log at `.claude/workflow/<slug>/refactor-log.md`**
-throughout this entire skill. After every task cycle, append:
+This orchestrator mirrors the `implement` and `modernize` architecture:
+
+- **Context isolation per phase.** Each phase skill runs in a forked subagent
+  context. The orchestrator is the only agent that holds the Phase Log.
+- **Compact handoffs.** Each phase skill returns a structured Phase Handoff.
+  The orchestrator passes only that document to the next phase.
+- **Independent phase invocability.** Each sub-skill (`/catalog`, `/blueprint`,
+  `/execute`) can be invoked standalone. This is the resume mechanism — if a
+  run is interrupted after a phase completes, re-invoke from that sub-skill
+  directly rather than re-running the whole workflow.
+- **Two mandatory user gates** — after Catalog and after Blueprint. The user
+  must confirm before the orchestrator proceeds.
+- **No auto-merge.** The user reviews and merges `refactor/<slug>` manually.
+
+---
+
+## Phase Handoff format
 
 ```text
-### Task <id>: <task title>
-Status: complete | reverted | blocked
-Branch: task/refactor-<slug>-<task-id>
-Smells addressed:
-  - <smell + location>
-Changes made:
-  - <what changed>
-Test Runner iterations: <N>
-Test Runner verdict: green | red
-Contrarian rounds: <N>
-Contrarian verdict: approved | challenged
-Outcome: merged | reverted — <reason>
+=== PHASE HANDOFF ===
+Phase:     <Catalog | Blueprint | Execute>
+Status:    <complete | blocked — reason>
+Scope:     <scope>
+Branch:    refactor/<slug>
+Artifacts: <newline-separated file paths>
+Decisions: <bullet list of key decisions>
+For next:  <2–4 sentences for the next phase>
+Open:      <user items, or "none">
+=== END HANDOFF ===
+```
+
+Store the Phase Log at `.claude/workflow/<slug>/phase-log.md`.
+Append each handoff as it arrives.
+
+---
+
+## User progress report format
+
+After every phase completes:
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Phase <N> — <Phase Name> complete
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**What happened**
+<2–4 sentences: what agents ran, what they found or built, what Contrarian
+challenged and how Architect responded. Be concrete.>
+
+**Key decisions**
+<bullet list with one-line rationale each>
+
+**Artifacts**
+<bullet list from handoff Artifacts, one-sentence description each>
+
+**What goes to Phase <N+1>**
+<verbatim "For next:" from the Phase Handoff>
+
+**Open items** (omit if none)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
 ---
 
-## Agent coordination protocol
+## User check-in policy
 
-Try team-based coordination first:
+**After Phase 1 (Catalog):** pause and present the smell summary. Ask:
 
-```text
-TeamCreate({ name: "refactor-team",
-             agents: ["investigator", "architect", "contrarian",
-                      "refactoring-engineer", "simplifier",
-                      "logging-implementer", "test-runner"] })
-SendMessage({ to: "investigator", message: "<task + context>" })
-```
+> "Catalog complete. Found <N> smells (high: <N>, medium: <N>, low: <N>).
+> Excluded by Contrarian: <list or none>.
+> Proceed to Blueprint? Or adjust scope?
+>
+> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: blueprint`"
 
-Use `SendMessage` to pass Agent Handoffs between agents. Fall back to
-sequential `Agent` tool calls if `TeamCreate` fails. Do not retry teams
-more than once.
+Wait for explicit confirmation. Incorporate any user-added exclusions into
+the handoff passed to Blueprint.
 
----
+**After Phase 2 (Blueprint):** pause and present the task plan. Ask:
 
-## Agent Handoff format
+> "Blueprint complete. <N> tasks planned across <N> files.
+> Contrarian challenges resolved: <summary>.
+> Unresolved critical items (if any): <list>.
+> Proceed to Execute?
+>
+> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: execute`"
 
-```text
---- AGENT HANDOFF ---
-From:     <agent name>
-To:       <next agent>
-Status:   complete | blocked
-Branch:   <branch name>
-Done:
-  - <key action taken>
-Decisions:
-  - <decision + rationale, or "none">
-Findings:
-  - <finding + severity, or "none">
-Open:
-  - <item + owner, or "none">
-Pass forward:
-  <2–3 sentences of critical context for the next agent>
---- END HANDOFF ---
-```
+Wait for explicit confirmation.
+
+**After Phase 3 (Execute):** post the progress report and proceed to the
+final report automatically.
 
 ---
 
-## Worktree protocol
+## Step 1 — Git setup and baseline
 
-Each task runs on a dedicated short-lived branch:
-
-```bash
-git worktree add ../worktree-refactor-<task-id> -b task/refactor-<slug>-<task-id>
-```
-
-- **Refactoring Engineer, Simplifier, Logging Implementer** commit to the
-  task branch sequentially. Use `isolation: "worktree"` for code-changing
-  agent calls.
-- **Test Runner and Contrarian** read from the task branch but do not commit.
-
-**Parallel task conflict rule:** before starting parallel tasks, check that
-no two parallel tasks list overlapping files. Tasks that touch the same file
-must be sequenced (the second depends on the first), not parallelized. Record
-this in the dependency graph.
-
-**Merge checkpoint** — after Contrarian approves:
-
-```bash
-git checkout refactor/<slug>
-git merge --no-ff task/refactor-<slug>-<task-id> -m "refactor(<task-id>): <task title>"
-git worktree remove ../worktree-refactor-<task-id>
-```
-
-**Revert checkpoint** — if a task is abandoned:
-
-```bash
-git worktree remove ../worktree-refactor-<task-id>
-# branch abandoned — no merge
-```
-
----
-
-## Task scheduling
-
-After the task list is finalized (Step 6), build a dependency graph:
-
-- **Independent**: no dependency on another incomplete task AND no overlapping
-  files with other in-flight tasks → eligible for parallel execution
-- **Dependent**: requires a prior task to be merged first, or overlapping
-  files with another in-flight task → must wait
-
-A dependent task becomes eligible as soon as all its dependencies are merged
-into `refactor/<slug>`.
-
----
-
-## Workflow
-
-### Step 1 — Git setup and baseline
+Skip if resuming (branch and baseline already exist — verify, don't recreate):
 
 ```bash
 git checkout main && git pull
@@ -151,291 +131,73 @@ mkdir -p .claude/workflow/<slug>
 cargo test 2>&1 | tee .claude/workflow/<slug>/baseline-tests.txt
 ```
 
-Record the baseline in the refactor log header:
+If resuming and branch already exists: verify it is clean and ahead of main.
+If `.claude/workflow/<slug>/baseline-tests.txt` is missing, re-run `cargo test`.
+
+Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Catalog."
+
+---
+
+## Step 2 — Invoke Phase 1: Catalog
+
+Skip if `RESUME_FROM` is `blueprint`, `execute`, or `task-<id>`.
 
 ```text
-## Baseline
-Branch: refactor/<slug>
-Scope: <scope>
-Boundaries: <boundaries or none>
-Baseline tests: <pass/fail summary>
-Pre-existing failures: <list, or none>
+Skill("catalog", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>")
 ```
 
-**If the baseline is completely broken** (majority of tests fail), surface
-to the user and halt. Do not refactor into a broken baseline.
+Wait for Phase Handoff. Append to phase log.
 
-### Step 2 — Investigator: smell catalog
+**If `Status: complete — no smells found`:** report to user and stop.
 
-Invoke **investigator** with scope, boundaries, and baseline. Task:
+**Post Phase 1 progress report. User check-in.**
 
-> Read every file in scope: `<scope>`.
-> Catalog every structural problem you find:
-> - Over-long functions (> ~50 lines of logic)
-> - Mixed concerns (a function or module doing more than one thing)
-> - Leaky abstractions (internals exposed unnecessarily)
-> - Duplicated logic (same pattern repeated in two or more places)
-> - Under-instrumented code paths (branches with no tracing calls)
-> - `#[allow(deprecated)]` suppressions and `// TODO`/`// FIXME` comments
->   related to structure or debt
-> - Overly complex control flow (deep nesting, long match arms)
->
-> For each smell, record: location (file:line), severity (high/medium/low),
-> one-line description, and which boundary (if any) it is adjacent to.
->
-> Do NOT propose fixes. Do NOT touch any code in `<boundaries>`.
-> Produce an Agent Handoff with the full smell catalog, ordered by severity.
-
-**If the smell catalog is empty** (no smells found): produce a Phase Handoff
-with `Status: complete`, note that no structural issues were found, and stop.
-Do not proceed further.
-
-### Step 3 — Contrarian: challenge the smell catalog
-
-Invoke **contrarian** with the Investigator handoff. Task:
-
-> Review the smell catalog. Challenge:
-> - Smells classified as high-severity that may not warrant the risk of
->   refactoring (is the benefit worth the disruption?)
-> - Smells the Investigator missed — are there structural problems not listed?
-> - Any smell adjacent to a boundary in `<boundaries>` — is it actually safe
->   to touch, or should it be excluded?
-> - Smells that are interdependent (fixing one requires fixing another first)
->
-> Produce an Agent Handoff with:
-> - Revised severity classifications where challenged
-> - Additional smells found (if any)
-> - Smells that should be excluded (too risky or boundary-adjacent)
-> - Interdependency notes between smells
-
-### Step 4 — User gate: smell catalog review
-
-Present the validated smell catalog (Investigator findings + Contrarian
-corrections) to the user:
-
-> "Smell catalog ready for `<scope>`. Found <N> smells:
-> High severity: <count> — <one-line list>
-> Medium severity: <count>
-> Low severity: <count>
-> Excluded (Contrarian): <list with reason>
->
-> Proceed with all high/medium smells? Or adjust scope before I continue?"
-
-Wait for confirmation. The user may exclude additional smells or change
-scope. Incorporate their response before proceeding to Step 5.
-
-### Step 5 — Architect: refactoring task list
-
-Invoke **architect** with the validated smell catalog (post-Contrarian,
-post-user confirmation) and boundaries. Task:
-
-> Using the validated smell catalog, produce an ordered, dependency-aware
-> list of refactoring tasks. Each task must:
-> - Address one or more related smells (group by locality)
-> - Be small enough to verify independently (single function, module,
->   or abstraction boundary — touchable in one worktree)
-> - Include: what to change, smells addressed, files and line ranges touched,
->   verification criterion (e.g. "function X split into Y and Z, each < 30
->   lines"), and dependencies on other tasks
-> - Respect all boundaries — if a smell is near a boundary, document why
->   it is either safe to touch or excluded
->
-> Produce an Agent Handoff with the full task list (id, title, smells, files,
-> verification criterion, dependencies).
-
-### Step 6 — Contrarian: challenge the task list
-
-Invoke **contrarian** with the Architect handoff and the smell catalog. Task:
-
-> Review the refactoring task list. Challenge:
-> - Tasks that risk behavior change (restructuring is too aggressive)
-> - Tasks too large to verify atomically (should be split)
-> - Sequencing that could leave the codebase in a broken intermediate state
-> - Tasks touching a boundary — is the specific change actually safe?
-> - Tasks with incorrect dependency declarations (missing or spurious deps)
-> - Missing tasks for smells the Architect overlooked
->
-> Produce an Agent Handoff. Classify each challenge: critical / major / minor.
-
-Pass the Contrarian handoff to **architect**. Task:
-
-> For each challenge: revise the task list to address it, or dismiss it with
-> a clear rationale. Produce an updated Agent Handoff with the final task list.
-
-**One round only.** If unresolved critical challenges remain after Architect's
-response, collect them and surface to the user:
-
-> "Contrarian raised unresolved critical issues with the refactoring plan:
-> <list>. Recommend: [architect's suggested resolution]. How would you
-> like to proceed?"
-
-Wait for user direction before continuing.
+Incorporate user adjustments as an amendment note appended to the Catalog
+handoff before passing to Blueprint.
 
 ---
 
-## Per-task cycle
+## Step 3 — Invoke Phase 2: Blueprint
 
-Read the final task list. For each task (run in parallel where scheduling
-allows):
+Skip if `RESUME_FROM` is `execute` or `task-<id>`. When resuming at
+`blueprint`, load the Catalog handoff from `.claude/workflow/<slug>/smell-catalog.md`.
 
-### Step 7 — Assign
-
-Record the task as in-progress in the refactor log. Create the worktree
-branch. Pass to Refactoring Engineer: task description, branch name, scope,
-boundaries, and the verification criterion.
-
-### Step 8 — Refactoring Engineer
-
-Invoke **refactoring-engineer** on `task/refactor-<slug>-<task-id>`. Task:
-
-> Perform the refactoring described in task `<id>`: `<task description>`.
-> Work on branch `task/refactor-<slug>-<task-id>`.
-> Follow project conventions: Rust 2021, tokio, anyhow, thiserror.
-> Do not change observable behavior. Do not touch: `<boundaries>`.
-> Verification criterion: `<criterion>`.
-> Commit your changes. Produce an Agent Handoff.
-
-### Step 9 — Simplifier
-
-Invoke **simplifier** with the Refactoring Engineer handoff. Task:
-
-> Review the changes on branch `task/refactor-<slug>-<task-id>`.
-> Remove: dead code, premature abstractions, over-engineered solutions,
-> unnecessary complexity introduced by the refactoring itself.
-> Do not nitpick style. Fix only real problems.
-> Do not touch: `<boundaries>`. Commit. Produce an Agent Handoff.
-
-### Step 10 — Logging Implementer
-
-Invoke **logging-implementer** with the Simplifier handoff. Task:
-
-> Retrofit every code path touched on branch `task/refactor-<slug>-<task-id>`
-> with structured 5-level tracing per the project logging spec:
-> - WARN: lifecycle events (proxy/CA bound, mode started/stopped)
-> - INFO: atomic operations (connection accepted, request complete)
-> - DEBUG: every branch, raw data (truncated to 256 bytes), headers (auth redacted)
-> Use structured fields (`key = %val`), never format strings.
-> Never log inside a held Mutex lock.
-> Do not touch: `<boundaries>`. Commit. Produce an Agent Handoff.
-
-### Step 11 — Test Runner: behavior gate
-
-Invoke **test-runner** on the task branch. Task:
-
-> Run `cargo test` against `task/refactor-<slug>-<task-id>`.
-> Compare results against `.claude/workflow/<slug>/baseline-tests.txt`.
-> Produce a verdict:
-> - `green` — all tests that passed at baseline still pass
-> - `red` — one or more previously-passing tests now fail (list each: test
->   name, failure message, likely cause — is this a behavior change or a
->   test fixture issue?)
-
-**If green:** proceed to Step 12.
-
-**If red:** pass the Test Runner handoff back to **refactoring-engineer**:
-
-> Tests regressed on branch `task/refactor-<slug>-<task-id>`.
-> Failing tests: `<list>`. Diagnoses: `<list>`.
-> Fix the regression without changing behavior. Commit. Produce a handoff.
-
-After the fix, repeat the full chain: Simplifier (Step 9) → Logging
-Implementer (Step 10) → Test Runner (Step 11).
-
-**Maximum fix iterations: 3.** If still red after 3 full chain repeats,
-revert the task:
-
-```bash
-git worktree remove ../worktree-refactor-<task-id>
+```text
+Skill("blueprint", "<catalog handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
 ```
 
-Record in the refactor log: `Status: reverted`. Move to the next task.
-Collect all reverts; surface them in the final completion report only
-(not individually during the run).
+Wait for Phase Handoff. Append to phase log.
 
-### Step 12 — Contrarian: structure gate
+**If `Status: blocked`:** surface unresolved Contrarian challenges to user.
+Wait for direction before continuing.
 
-Invoke **contrarian** with the full handoff chain (Steps 8–11) and the
-branch name. Task:
-
-> Review the complete changes on branch `task/refactor-<slug>-<task-id>`.
-> Verify:
-> - Does the refactoring meet its verification criterion: `<criterion>`?
-> - Are there residual smells the task was supposed to address?
-> - Is every touched code path correctly instrumented per the logging spec?
-> - Were any boundaries in `<boundaries>` touched?
->
-> Produce a verdict: approved or challenged.
-> For each challenge:
-> - `[SMELL]` — smell not fully addressed (route to Refactoring Engineer)
-> - `[LOGGING]` — instrumentation gap (route to Logging Implementer)
-> - `[BEHAVIOR]` — potential behavior change concern (route to Refactoring
->   Engineer, must re-run Test Runner after fix)
-
-**If challenged:** route challenges to the appropriate agent. After fixes,
-repeat the full chain from the relevant step:
-- `[SMELL]` or `[BEHAVIOR]`: Refactoring Engineer (Step 8) → Simplifier →
-  Logging Implementer → Test Runner → Contrarian
-- `[LOGGING]` only: Logging Implementer (Step 10) → Test Runner → Contrarian
-
-**Maximum Contrarian rounds: 3.** If not approved after 3 rounds, record
-as blocked, surface to user, and do not merge. Move to the next task.
-
-### Step 13 — Merge, clean up team, and log
-
-After Contrarian approval:
-
-1. If a task team was created, shut it down before merging:
-   ```text
-   SendMessage({ to: "refactoring-engineer", message: {type: "shutdown_request"} })
-   SendMessage({ to: "simplifier",           message: {type: "shutdown_request"} })
-   SendMessage({ to: "logging-implementer",  message: {type: "shutdown_request"} })
-   SendMessage({ to: "test-runner",          message: {type: "shutdown_request"} })
-   SendMessage({ to: "contrarian",           message: {type: "shutdown_request"} })
-   TeamDelete()
-   ```
-2. Merge the task branch into the refactor branch.
-3. Mark complete in the refactor log.
-4. Move to the next task.
+**Post Phase 2 progress report. User check-in.**
 
 ---
 
-## Final validation
+## Step 4 — Invoke Phase 3: Execute
 
-After all tasks have been processed (before team cleanup):
+When resuming at `execute` or `task-<id>`, load the Blueprint handoff from
+`.claude/workflow/<slug>/task-list.md`. Append `RESUME_FROM: task-<id>` to
+the arguments if resuming mid-execution.
+
+```text
+Skill("execute", "<blueprint handoff content>")
+```
+
+Wait for Phase Handoff. Append to phase log.
+
+**Post Phase 3 progress report.** Note any reverted or blocked tasks clearly.
+
+---
+
+## Step 5 — Final report
 
 ```bash
 cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
 ```
 
-Compare against baseline. If any previously-passing test now fails, the
-refactor branch is not ready — surface to user with the diff between
-baseline and final test output. Do not proceed to completion report until
-this is resolved or the user explicitly accepts the failure.
-
----
-
-## Team cleanup (safety net)
-
-After final validation, ensure all teams are cleaned up:
-
-```text
-SendMessage({ to: "investigator",         message: {type: "shutdown_request"} })
-SendMessage({ to: "architect",            message: {type: "shutdown_request"} })
-SendMessage({ to: "contrarian",           message: {type: "shutdown_request"} })
-SendMessage({ to: "refactoring-engineer", message: {type: "shutdown_request"} })
-SendMessage({ to: "simplifier",           message: {type: "shutdown_request"} })
-SendMessage({ to: "logging-implementer",  message: {type: "shutdown_request"} })
-SendMessage({ to: "test-runner",          message: {type: "shutdown_request"} })
-TeamDelete()
-```
-
-Skip agents already shut down per-task in Step 13.
-
----
-
-## Completion
-
-Produce a **completion report** to the user:
+Report to the user:
 
 ```text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -443,42 +205,30 @@ Produce a **completion report** to the user:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 Branch: refactor/<slug>
-Refactor log: .claude/workflow/<slug>/refactor-log.md
+Phase log: .claude/workflow/<slug>/phase-log.md
 
-Tasks merged:   <N> — <list with one-line description each>
+Tasks merged:   <N>
 Tasks reverted: <N> — <list with reason, or "none">
 Tasks blocked:  <N> — <list with reason, or "none">
 
 Smells addressed: <count>
-Smells remaining: <count and locations — from reverted/blocked tasks>
+Smells remaining: <count and locations>
 
-Behavior guarantee: baseline tests reproduced exactly
+Behavior guarantee:
   Baseline: <X tests passing>
   Final:    <X tests passing>
 
-Logging coverage: every touched path instrumented per 5-level spec
-
-Next steps (if any):
-<blocked tasks, user-excluded smells, or smells near boundaries that
-were left intentionally untouched>
+To merge:
+  git checkout main && git merge --no-ff refactor/<slug>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 
-Then produce a **Phase Handoff** (for programmatic invocation):
+---
 
-```text
-=== PHASE HANDOFF ===
-Phase:     Refactor
-Status:    complete  (or: blocked — <reason>)
-Scope:     <scope>
-Branch:    refactor/<slug>
-Artifacts:
-  .claude/workflow/<slug>/refactor-log.md
-  .claude/workflow/<slug>/baseline-tests.txt
-  .claude/workflow/<slug>/final-tests.txt
-Decisions: <bullet list of key structural decisions made>
-For next:  <what follow-on work needs to know: what changed, what was left,
-            areas that may need further attention>
-Open:      <reverted or blocked tasks, or "none">
-=== END HANDOFF ===
-```
+## Orchestration rules
+
+- Invoke phases in order. Never start a phase before the previous returns a
+  complete handoff.
+- Pass only the Phase Handoff to the next phase — not the full phase log.
+- If a phase returns a malformed handoff, ask the user whether to re-invoke
+  or proceed manually.
