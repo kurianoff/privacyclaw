@@ -27,7 +27,8 @@ pub fn fmt_chunk_hex(data: &[u8], max: usize) -> String {
 
 /// Format an HTTP header block (raw text), redacting sensitive header values.
 /// Replaces values of `authorization` and `x-api-key` with `[REDACTED]`.
-#[allow(dead_code)]
+/// Use this helper whenever logging raw HTTP headers to avoid credential leakage.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn fmt_headers(raw: &str) -> String {
     raw.lines()
         .map(|line| {

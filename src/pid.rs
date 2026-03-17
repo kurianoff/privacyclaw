@@ -86,7 +86,6 @@ mod tests {
     use super::*;
 
     /// Override PID file path via env var for tests to avoid touching real config dir.
-    #[allow(dead_code)]
     fn tmp_pid_path() -> PathBuf {
         let dir = tempfile::tempdir().unwrap();
         // keep the dir alive so the path remains valid during the test

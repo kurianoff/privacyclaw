@@ -20,7 +20,7 @@ pub struct PiiDetection {
     pub tier: u8,
     pub confidence: f32,
     /// Set after Phase B stores the request messages; None until then.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub message_id: Option<String>,
 }
 
@@ -133,7 +133,7 @@ exactly as written, including the § delimiters.";
 
 impl PiiPipeline {
     /// Tier 1 only — no NER or SLM. Used for unit tests and when optional tiers are disabled.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn tier1_only() -> Self {
         Self { tier2: None, slm: None, slm_confidence_threshold: 0.7, slm_standalone: false }
     }
@@ -319,7 +319,7 @@ impl PiiPipeline {
     /// so the caller can forward the original bytes unchanged.
     ///
     /// `vault` must already be write-locked by the caller.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn process_request_body(
         body: &[u8],
         vault: &mut PiiVault,
@@ -438,7 +438,7 @@ impl PiiPipeline {
     ///
     /// Original text is NOT included — only the entity type, byte range, confidence,
     /// and the conversation id are logged.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn log_detections(spans: &[PiiSpan], conv_id: &str) {
         for span in spans {
             tracing::info!(
@@ -762,7 +762,7 @@ fn try_load_tier2(cfg: &crate::config::PiiConfig) -> Option<tier2::Tier2Detector
 /// `new_body`         — replacement body bytes.
 ///
 /// Returns: `new_headers_bytes || new_body`.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn rebuild_request(original_request: &[u8], header_end: usize, new_body: &[u8]) -> Vec<u8> {
     let header_bytes = &original_request[..header_end];
     let header_str = String::from_utf8_lossy(header_bytes);
@@ -780,7 +780,7 @@ pub fn rebuild_request(original_request: &[u8], header_end: usize, new_body: &[u
 
 /// Replace the numeric value in a `Content-Length:` header line.
 /// If no such header is found the original string is returned unchanged.
-#[allow(dead_code)]
+#[cfg_attr(not(test), allow(dead_code))]
 fn replace_content_length(headers: &str, new_value: &str) -> String {
     // Work line-by-line so we don't accidentally clobber other headers.
     let mut result = String::with_capacity(headers.len());

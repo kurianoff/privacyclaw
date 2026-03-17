@@ -5,8 +5,6 @@ use rcgen::{BasicConstraints, CertificateParams, DnType, IsCa, KeyUsagePurpose};
 use std::path::{Path, PathBuf};
 
 pub struct CaBundle {
-    #[allow(dead_code)]
-    pub cert_pem: String,
     pub key_pem: String,
     pub cert_der: Vec<u8>,
 }
@@ -30,7 +28,7 @@ pub fn load_ca(ca_dir: &Path) -> Result<Option<CaBundle>> {
     let cert_der = pem_cert_to_der(&cert_pem)?;
     tracing::debug!(der_bytes = cert_der.len(), "ca: cert DER bytes");
     tracing::info!(cert_path = %cert_path.display(), "ca: CA loaded from disk");
-    Ok(Some(CaBundle { cert_pem, key_pem, cert_der }))
+    Ok(Some(CaBundle { key_pem, cert_der }))
 }
 
 /// Generate a new ECDSA P-256 CA and save to disk.
@@ -68,7 +66,7 @@ pub fn generate_ca(ca_dir: &Path) -> Result<CaBundle> {
     }
 
     tracing::warn!(cert_path = %cert_path.display(), "ca: CA generated");
-    Ok(CaBundle { cert_pem, key_pem, cert_der })
+    Ok(CaBundle { key_pem, cert_der })
 }
 
 /// Remove CA files.
@@ -146,7 +144,7 @@ fn print_manual_instructions(cert_path: &Path) {
 ///
 /// This function mirrors the shell-script guard in `packaging/postinstall`:
 ///   `if [ -f "$CA_PEM" ]; then echo "CA already exists — skipping"; fi`
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn postinstall_should_skip_ca(ca_dir: &Path) -> bool {
     ca_dir.join("ca.pem").exists()
 }
