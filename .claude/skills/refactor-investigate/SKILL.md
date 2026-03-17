@@ -1,5 +1,5 @@
 ---
-name: catalog
+name: refactor-investigate
 description: Phase 1 of the refactor workflow. Investigator catalogs structural smells in the target scope (over-long functions, mixed concerns, duplication, under-instrumented paths, dead code). Contrarian challenges the classifications — revising severities, adding missed smells, and flagging boundary risks. Saves the validated catalog to smell-catalog.md. Can be invoked standalone or as part of /refactor.
 argument-hint: "<scope> [BOUNDARIES: <do-not-touch list>] [BRANCH: refactor/<slug>]"
 context: fork

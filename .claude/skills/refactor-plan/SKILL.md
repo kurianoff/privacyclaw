@@ -1,6 +1,6 @@
 ---
-name: blueprint
-description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware refactoring task list. Contrarian challenges the plan for behavior risk, task granularity, sequencing, and boundary safety. Saves the finalized task list to task-list.md. Can be invoked standalone by passing a Catalog Phase Handoff as the argument.
+name: refactor-plan
+description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware refactoring task list. Contrarian challenges the plan for behavior risk, task granularity, sequencing, and boundary safety. Saves the finalized task list to task-list.md. Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
 argument-hint: "<catalog phase handoff> [USER_EXCLUSIONS: <additional exclusions>]"
 context: fork
 ---

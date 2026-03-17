@@ -1,6 +1,6 @@
 ---
-name: execute
-description: Phase 3 of the refactor workflow. Executes every task from the Blueprint task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Can be invoked standalone by passing a Blueprint Phase Handoff as the argument.
+name: refactor-execute
+description: Phase 3 of the refactor workflow. Executes every task from the Blueprint task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Can be invoked standalone by passing a Refactor-Plan Phase Handoff as the argument.
 argument-hint: "<blueprint phase handoff> [RESUME_FROM: task-<id>]"
 context: fork
 ---

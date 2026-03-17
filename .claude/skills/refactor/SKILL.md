@@ -1,7 +1,7 @@
 ---
 name: refactor
-description: Orchestrate the full refactoring workflow (Catalog → Blueprint → Execute). Investigator + Contrarian catalog structural smells, Architect + Contrarian produce a task list, then a per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) executes each one with a revert protocol. Standalone skill — not part of the implement flow.
-argument-hint: "<scope> [DO NOT TOUCH: <boundaries>] [RESUME_FROM: catalog|blueprint|execute|task-<id>] [SLUG: <existing-slug>]"
+description: Orchestrate the full refactoring workflow (Investigate → Plan → Execute). Investigator + Contrarian investigate structural smells, Architect + Contrarian plan a task list, then a per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) executes each one with a revert protocol. Standalone skill — not part of the implement flow.
+argument-hint: "<scope> [DO NOT TOUCH: <boundaries>] [RESUME_FROM: refactor-investigate|refactor-plan|refactor-execute|task-<id>] [SLUG: <existing-slug>]"
 context: fork
 ---
 
@@ -33,11 +33,11 @@ This orchestrator mirrors the `implement` and `modernize` architecture:
   context. The orchestrator is the only agent that holds the Phase Log.
 - **Compact handoffs.** Each phase skill returns a structured Phase Handoff.
   The orchestrator passes only that document to the next phase.
-- **Independent phase invocability.** Each sub-skill (`/catalog`, `/blueprint`,
-  `/execute`) can be invoked standalone. This is the resume mechanism — if a
+- **Independent phase invocability.** Each sub-skill (`/refactor-investigate`, `/refactor-plan`,
+  `/refactor-execute`) can be invoked standalone. This is the resume mechanism — if a
   run is interrupted after a phase completes, re-invoke from that sub-skill
   directly rather than re-running the whole workflow.
-- **Two mandatory user gates** — after Catalog and after Blueprint. The user
+- **Two mandatory user gates** — after Investigate and after Plan. The user
   must confirm before the orchestrator proceeds.
 - **No auto-merge.** The user reviews and merges `refactor/<slug>` manually.
 
@@ -143,7 +143,7 @@ Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Catalog."
 Skip if `RESUME_FROM` is `blueprint`, `execute`, or `task-<id>`.
 
 ```text
-Skill("catalog", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>")
+Skill("refactor-investigate", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -163,7 +163,7 @@ Skip if `RESUME_FROM` is `execute` or `task-<id>`. When resuming at
 `blueprint`, load the Catalog handoff from `.claude/workflow/<slug>/smell-catalog.md`.
 
 ```text
-Skill("blueprint", "<catalog handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
+Skill("refactor-plan", "<catalog handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -182,7 +182,7 @@ When resuming at `execute` or `task-<id>`, load the Blueprint handoff from
 the arguments if resuming mid-execution.
 
 ```text
-Skill("execute", "<blueprint handoff content>")
+Skill("refactor-execute", "<blueprint handoff content>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
