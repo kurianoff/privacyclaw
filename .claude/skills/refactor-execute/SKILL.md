@@ -1,24 +1,24 @@
 ---
 name: refactor-execute
-description: Phase 3 of the refactor workflow. Executes every task from the Blueprint task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Can be invoked standalone by passing a Refactor-Plan Phase Handoff as the argument.
-argument-hint: "<blueprint phase handoff> [RESUME_FROM: task-<id>]"
+description: Phase 3 of the refactor workflow. Executes every task from the Refactor-Plan task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Can be invoked standalone by passing a Refactor-Plan Phase Handoff as the argument.
+argument-hint: "<refactor-plan phase handoff> [RESUME_FROM: task-<id>]"
 context: fork
 ---
 
 # Phase 3 — Execute
 
 You are the **Phase 3 coordinator**. Your job is to execute every task in the
-Blueprint task list — each one refactored, simplified, instrumented, test-green,
+Refactor-Plan task list — each one refactored, simplified, instrumented, test-green,
 and Contrarian-approved — before returning to the refactor orchestrator.
 
 Input: **$ARGUMENTS**
 
 Extract from the input:
-- `scope`: the code area being refactored (from Blueprint handoff)
-- `boundaries`: do-not-touch zones (from Blueprint handoff)
+- `scope`: the code area being refactored (from Refactor-Plan handoff)
+- `boundaries`: do-not-touch zones (from Refactor-Plan handoff)
 - `branch`: the refactor branch (`refactor/<slug>`)
-- `task_list`: path to the task list (from Blueprint handoff `Artifacts`)
-- `for_next`: context from Blueprint (parallel-safe tasks, risky tasks)
+- `task_list`: path to the task list (from Refactor-Plan handoff `Artifacts`)
+- `for_next`: context from Refactor-Plan (parallel-safe tasks, risky tasks)
 - `RESUME_FROM`: optional `task-<id>` — skip all tasks before this one
 
 **Inject into every agent's context:** scope, boundaries, branch name.
@@ -113,6 +113,44 @@ git worktree remove ../worktree-refactor-<id>
 
 ---
 
+## Live progress reports
+
+Emit a progress announcement to the user at two moments per task — start and
+completion. Do NOT wait until the Phase Handoff to tell the user anything.
+
+**Task start** (emit immediately at Step 1, before creating the worktree):
+
+```
+─── Task <id>/<total> starting: <title>
+    Files: <list>
+    Smells: <list of smell IDs being addressed>
+```
+
+**Task complete** (emit immediately at Step 7, after the merge commits):
+
+```
+━━━ Task <id>/<total> — <title>  [merged ✓ | reverted ✗ | blocked ⚠]
+    Changed: <files changed, one per line>
+    Test Runner: green in <N> iteration(s)
+    Contrarian: approved in <N> round(s)
+    Smells addressed: <list>
+```
+
+If reverted or blocked, replace the Test Runner / Contrarian lines with:
+
+```
+    Reason: <why it was reverted or blocked>
+    Next: <what would unblock it, or "none">
+```
+
+**Running tally** — append after every task-complete report:
+
+```
+    Progress: <completed>/<total> tasks merged, <reverted> reverted, <blocked> blocked
+```
+
+---
+
 ## Task scheduling
 
 Read `<task_list>`. Build a dependency graph:
@@ -132,9 +170,9 @@ For each task (parallel where scheduling allows):
 
 ### Step 1 — Assign
 
-Mark in-progress in refactor log. Create worktree. Pass to Refactoring
-Engineer: task `id`, `title`, `changes`, `criterion`, `files`, branch name,
-scope, and boundaries.
+**Emit task-start progress report.** Mark in-progress in refactor log. Create
+worktree. Pass to Refactoring Engineer: task `id`, `title`, `changes`,
+`criterion`, `files`, branch name, scope, and boundaries.
 
 ### Step 2 — Refactoring Engineer
 
@@ -191,8 +229,8 @@ then repeat Steps 3–5 (Simplifier → LogImpl → Test Runner).
 git worktree remove ../worktree-refactor-<id>
 ```
 
-Record `Status: reverted`. Collect reverts silently — report in final output
-only. Move to next task.
+Record `Status: reverted`. **Emit task-complete progress report (reverted ✗)
+with running tally.** Move to next task.
 
 ### Step 6 — Contrarian: structure gate
 
@@ -213,11 +251,14 @@ Invoke **contrarian** with the full handoff chain (Steps 2–5). Task:
 >   must re-run Test Runner
 
 **Maximum Contrarian rounds: 3.** If not approved: record as blocked,
+**emit task-complete progress report (blocked ⚠) with running tally,**
 surface to orchestrator in Phase Handoff `Open`, do not merge.
 
 ### Step 7 — Merge, clean up team, log
 
 After Contrarian approval:
+
+**Emit task-complete progress report** (merged ✓) with running tally.
 
 1. Shut down task team:
    ```text
@@ -260,7 +301,7 @@ Produce a **Phase Handoff**:
 
 ```text
 === PHASE HANDOFF ===
-Phase:     Execute
+Phase:     Refactor-Execute
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>

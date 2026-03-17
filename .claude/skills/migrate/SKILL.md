@@ -127,6 +127,53 @@ git revert HEAD --no-edit  # if the bump was the last commit
 
 ---
 
+## Live progress reports
+
+Emit a progress announcement to the user at key moments. Do NOT wait until
+the Phase Handoff to tell the user what happened.
+
+**Batch A complete** (after Step 3 passes, or after Developer fixes land):
+
+```
+━━━ Batch A complete
+    Deps bumped: <count> (<names>)
+    Status: clean | required <N> fix iteration(s)
+    Test Runner: green | Contrarian rounds: N
+```
+
+**Task start** (emit immediately at Step 4a, before the worktree is created):
+
+```
+─── Task <task-id>/<total> starting: migrate <dep> <current> → <target>
+    Batch: B | C
+    Files: <list from migration plan>
+    Confidence: high | medium | low
+```
+
+**Task complete** (emit immediately at Step 4h, after the merge commits):
+
+```
+━━━ Task <task-id>/<total> — <dep> <current> → <target>  [merged ✓ | reverted ✗ | blocked ⚠]
+    Investigator: clean | N remaining usages fixed
+    Test Runner: green in <N> iteration(s)
+    Contrarian: approved in <N> round(s)
+```
+
+If reverted or blocked, replace the last two lines with:
+
+```
+    Reason: <why>
+    Next: <what would unblock it, or "none">
+```
+
+**Running tally** — append after every task-complete report:
+
+```
+    Progress: <completed>/<total> tasks merged, <reverted> reverted, <blocked> blocked
+```
+
+---
+
 ## Task scheduling
 
 Build a dependency graph from the migration plan before starting Batch B/C.
@@ -212,6 +259,8 @@ bumps serially to `modernize/<slug>` before creating parallel worktrees).
 For each task:
 
 #### Step 4a — Apply Cargo.toml bump and create worktree
+
+**Emit task-start progress report** before creating the worktree.
 
 On `modernize/<slug>`:
 ```bash
@@ -335,6 +384,8 @@ blocked, do not merge, surface to user in the final report.
 #### Step 4h — Merge, clean up team, log
 
 After Contrarian approval:
+
+**Emit task-complete progress report** (merged ✓) with running tally.
 
 1. Shut down task team if one was created:
    ```text
