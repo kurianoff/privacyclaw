@@ -28,6 +28,71 @@ use std::time::Duration;
 
 const VAULT_EVICT_INTERVAL: Duration = Duration::from_secs(60);
 
+// ── Shared proxy-resource bootstrap ───────────────────────────────────────────
+
+/// Resources shared between `run_tray_mode` and `cmd_start`.
+///
+/// Holds everything that is created identically in both paths: CA bundle,
+/// certificate cache, store, PII context, WebSocket channel, and the log
+/// guards that must stay alive for the process lifetime.
+#[cfg_attr(not(all(target_os = "macos", feature = "tray")), allow(dead_code))]
+pub(crate) struct ProxyResources {
+    pub cert_cache:   ca::cert_gen::CertCache,
+    pub store:        storage::Store,
+    pub pii:          PiiCtx,
+    pub ws_tx:        broadcast::Sender<dashboard::WsEvent>,
+    pub _log_guards:  Vec<tracing_appender::non_blocking::WorkerGuard>,
+}
+
+/// Load proxy resources shared by both the tray and CLI start paths.
+///
+/// Performs: config log-file override, logging init, version WARN, CA load,
+/// store open, cert cache init, PII context build, and ws_tx channel creation.
+/// Returns `ProxyResources`; caller constructs `ConfigManager` (needs `config_path`).
+#[cfg_attr(not(all(target_os = "macos", feature = "tray")), allow(dead_code))]
+pub(crate) fn load_proxy_resources(
+    cfg: &mut Config,
+    log_file: Option<&str>,
+    pii_flag: bool,
+    tray_mode: bool,
+) -> Result<ProxyResources> {
+    if let Some(path) = log_file {
+        cfg.logging.file = if path.is_empty() { None } else { Some(path.to_string()) };
+    }
+
+    let log_guards = init_logging(&cfg.logging);
+
+    tracing::warn!(
+        version = version::VERSION,
+        git_hash = version::GIT_HASH,
+        build_date = version::BUILD_DATE,
+        tray = tray_mode,
+        "privacyclaw starting"
+    );
+
+    let ca_dir = default_ca_dir();
+    let bundle = ca::load_ca(&ca_dir)?
+        .context("CA not initialized. Run `privacyclaw init` first.")?;
+
+    let store = storage::Store::open(&cfg.resolved_logs_dir())
+        .with_context(|| format!("Failed to open log dir: {:?}", cfg.resolved_logs_dir()))?;
+    tracing::info!(logs_dir = %cfg.resolved_logs_dir().display(), "store opened");
+
+    let cert_cache = ca::cert_gen::CertCache::new(bundle);
+    tracing::info!("cert cache initialised");
+
+    let pii = build_pii_ctx(cfg, pii_flag);
+    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
+
+    Ok(ProxyResources {
+        cert_cache,
+        store,
+        pii,
+        ws_tx,
+        _log_guards: log_guards,
+    })
+}
+
 /// Build a `PiiCtx` from config and CLI flag, or return `None` when PII is off.
 fn build_pii_ctx(cfg: &Config, pii_flag: bool) -> PiiCtx {
     let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
@@ -290,32 +355,19 @@ async fn async_main(cli: Cli) -> Result<()> {
 fn run_tray_mode(cli: Cli) -> Result<()> {
     let mut cfg = Config::load(cli.config.as_deref()).context("Failed to load config")?;
 
-    if let Some(ref path) = cli.log_file {
-        cfg.logging.file = if path.is_empty() { None } else { Some(path.clone()) };
-    }
-
-    let _guards = init_logging(&cfg.logging);
-
-    tracing::warn!(
-        version = version::VERSION,
-        git_hash = version::GIT_HASH,
-        build_date = version::BUILD_DATE,
-        "privacyclaw starting (tray mode)"
-    );
+    let pii_flag = match &cli.command {
+        Commands::Start { pii, .. } => *pii,
+        _ => unreachable!(),
+    };
 
     let config_path = cli.config
         .as_deref()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let pii_flag = match &cli.command {
-        Commands::Start { pii, .. } => *pii,
-        _ => unreachable!(),
-    };
+    let resources = load_proxy_resources(&mut cfg, cli.log_file.as_deref(), pii_flag, true)?;
 
     let dashboard_url = format!("http://{}", cfg.proxy.dashboard);
-
-    // Shared shutdown: tray Quit → notified → any listener on this Notify.
     let shutdown = Arc::new(Notify::new());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -323,20 +375,6 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
 
-    // ── Setup: load CA, open store, build caches ────────────────────────────
-    let ca_dir  = default_ca_dir();
-    let bundle  = ca::load_ca(&ca_dir)?
-        .context("CA not initialized. Run `privacyclaw init` first.")?;
-    let store   = storage::Store::open(&cfg.resolved_logs_dir())
-        .with_context(|| format!("Failed to open log dir: {:?}", cfg.resolved_logs_dir()))?;
-    tracing::info!(logs_dir = %cfg.resolved_logs_dir().display(), "store opened");
-
-    let cert_cache = ca::cert_gen::CertCache::new(bundle);
-    tracing::info!("cert cache initialised");
-
-    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
-
-    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);
     let cfg_mgr = ConfigManager::new((*cfg).clone(), Some(config_path));
 
@@ -346,8 +384,8 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         let proxy_state = dashboard::ProxyState::new();
         let download_tracker = crate::models::DownloadTracker::new();
         let (s, w, m, ps, dt) = (
-            store.clone(),
-            ws_tx.clone(),
+            resources.store.clone(),
+            resources.ws_tx.clone(),
             cfg_mgr.clone(),
             proxy_state,
             download_tracker,
@@ -360,23 +398,19 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         tracing::warn!(addr = %cfg.proxy.dashboard, "dashboard started (permanent)");
     }
 
-    if let Some(ref p) = pii {
+    if let Some(ref p) = resources.pii {
         let registry = Arc::clone(&p.registry);
         rt.spawn(async move {
             let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
-            loop {
-                interval.tick().await;
-                registry.evict_expired();
-            }
+            loop { interval.tick().await; registry.evict_expired(); }
         });
     }
 
     {
-        let s = store.clone();
+        let s = resources.store.clone();
         rt.spawn(rotation_loop(s));
     }
 
-    // Write PID file now that permanent tasks are running.
     if let Err(e) = pid::write_pid() {
         tracing::warn!(err = %e, "failed to write PID file");
     }
@@ -387,12 +421,12 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         http_listener_on: false,
         http_task:        None,
         net_task:         None,
-        cert_cache,
+        cert_cache: resources.cert_cache,
         cfg,
         cfg_mgr,
-        store,
-        ws_tx,
-        pii,
+        store:  resources.store,
+        ws_tx:  resources.ws_tx,
+        pii:    resources.pii,
         rt: rt.handle().clone(),
     };
 
