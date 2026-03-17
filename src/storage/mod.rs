@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -83,6 +84,10 @@ pub struct Store {
     /// Serialises concurrent appends to the same conversation file.
     /// Held only during the actual write(), not during any reads.
     write_lock: Arc<Mutex<()>>,
+    /// Cache from conv_id → file path.
+    /// Populated on insert_conversation; consulted before read_dir scan.
+    /// Files are only created, never renamed, so the cache never goes stale.
+    path_cache: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
 
 impl Store {
@@ -92,15 +97,25 @@ impl Store {
         Ok(Self {
             logs_dir: logs_dir.to_path_buf(),
             write_lock: Arc::new(Mutex::new(())),
+            path_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     // ── path helpers ──────────────────────────────────────────────────────────
 
     fn conv_file_path(&self, conv_id: &str) -> Option<PathBuf> {
+        // Fast path: check cache before performing a read_dir scan.
+        {
+            let cache = self.path_cache.lock().unwrap();
+            if let Some(p) = cache.get(conv_id) {
+                tracing::debug!(conv_id = %conv_id, "storage: conv_file_path cache hit");
+                return Some(p.clone());
+            }
+        }
+        // Cache miss: fall back to O(N) directory scan.
         let suffix = format!("_{}.ndjson", conv_id);
         tracing::debug!(conv_id = %conv_id, suffix = %suffix, "storage: conv_file_path scan");
-        std::fs::read_dir(&self.logs_dir)
+        let found = std::fs::read_dir(&self.logs_dir)
             .ok()?
             .flatten()
             .map(|e| e.path())
@@ -109,7 +124,13 @@ impl Store {
                     .and_then(|n| n.to_str())
                     .map(|n| n.ends_with(&suffix))
                     .unwrap_or(false)
-            })
+            })?;
+        // Populate cache for future lookups.
+        self.path_cache
+            .lock()
+            .unwrap()
+            .insert(conv_id.to_string(), found.clone());
+        Some(found)
     }
 
     fn new_conv_file_path(&self, conv_id: &str) -> PathBuf {
@@ -160,6 +181,11 @@ impl Store {
         let line = serde_json::to_string(conv)? + "\n";
         std::fs::write(&path, line.as_bytes())
             .with_context(|| format!("write conv {:?}", path))?;
+        // Populate path cache so subsequent conv_file_path calls skip read_dir.
+        self.path_cache
+            .lock()
+            .unwrap()
+            .insert(conv.id.clone(), path.clone());
         tracing::info!(conv_id = %conv.id, path = %path.display(), "storage: insert_conversation ok");
         Ok(())
     }
@@ -354,11 +380,23 @@ impl Store {
         };
         let vault_line = serde_json::to_string(&persisted)? + "\n";
 
+        // Read the file content before acquiring the write lock to minimise
+        // lock hold time (O(file_size) I/O stays outside the critical section).
+        let pre_content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read {:?} for vault save", path))?;
+        let vault_already_exists = pre_content.contains("\"type\":\"vault\"");
+
         let _guard = self.write_lock.lock().unwrap();
 
-        // Read existing file lines inside the lock to avoid TOCTOU races.
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {:?} for vault save", path))?;
+        // Re-read only to determine current line positions when a vault line
+        // already exists (need fresh line positions after any concurrent append).
+        // For the append-only path the pre_content check is sufficient.
+        let content = if vault_already_exists {
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("re-read {:?} for vault update", path))?
+        } else {
+            pre_content
+        };
 
         // Check if a vault line already exists.
         let mut lines: Vec<&str> = content.lines().collect();
