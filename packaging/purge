@@ -1,0 +1,189 @@
+#!/bin/bash
+# privacyclaw purge script
+# Completely removes all traces of privacyclaw from the system.
+# Run as root: sudo ./packaging/purge
+#
+# Covers everything postinstall + network-enable + launchctl_set_node_ca set:
+#   - Running process (stop + LaunchAgent bootout)
+#   - LaunchAgents: com.privacyclaw.proxy, com.privacyclaw.env
+#   - LaunchDaemons: com.privacyclaw.pf
+#   - launchctl env vars: NODE_EXTRA_CA_CERTS, SSL_CERT_FILE
+#   - pf anchor rules + anchor file + pf.conf entries
+#   - /etc/hosts entries
+#   - Binary: /usr/local/bin/privacyclaw
+#   - Shared data: /usr/local/share/privacyclaw
+#   - CA from System keychain
+#   - User data: ~/Library/Application Support/privacyclaw
+#   - PID file
+
+set -uo pipefail  # -e omitted: continue even if individual steps fail
+
+BINARY="/usr/local/bin/privacyclaw"
+SHARE_DIR="/usr/local/share/privacyclaw"
+LAUNCH_DAEMONS_DIR="/Library/LaunchDaemons"
+PF_PLIST="$LAUNCH_DAEMONS_DIR/com.privacyclaw.pf.plist"
+PF_ANCHOR_FILE="/etc/pf.anchors/privacyclaw"
+
+# Resolve the actual logged-in user (script runs as root).
+# Prefer $SUDO_USER (set by sudo), fall back to console owner, then logname.
+ACTUAL_USER="${SUDO_USER:-}"
+if [ -z "$ACTUAL_USER" ] || [ "$ACTUAL_USER" = "root" ]; then
+    ACTUAL_USER=$(scutil <<< "show State:/Users/ConsoleUser" 2>/dev/null | awk '/Name :/ { print $3 }')
+fi
+if [ -z "$ACTUAL_USER" ] || [ "$ACTUAL_USER" = "root" ]; then
+    ACTUAL_USER=$(logname 2>/dev/null || echo "")
+fi
+if [ -z "$ACTUAL_USER" ] || [ "$ACTUAL_USER" = "root" ]; then
+    echo "[purge] ERROR: cannot detect logged-in user. Run as: sudo ./packaging/purge"
+    exit 1
+fi
+USER_HOME=$(eval echo "~$ACTUAL_USER")
+USER_ID=$(id -u "$ACTUAL_USER" 2>/dev/null || echo "0")
+LAUNCH_AGENTS_DIR="$USER_HOME/Library/LaunchAgents"
+DATA_DIR="$USER_HOME/Library/Application Support/privacyclaw"
+CA_PEM="$DATA_DIR/ca/ca.pem"
+PID_FILE="$DATA_DIR/privacyclaw.pid"
+
+ok()   { echo "[purge] ✓ $*"; }
+warn() { echo "[purge] ⚠ $*"; }
+fail() { echo "[purge] ✗ $*"; }
+step() { echo; echo "[purge] ── $* ──────────────────────────────"; }
+
+echo "[purge] Starting full privacyclaw purge (user=$ACTUAL_USER uid=$USER_ID)"
+
+# ── 1. Stop the running process ───────────────────────────────────────────────
+step "1. Stop process"
+if [ -f "$BINARY" ]; then
+    "$BINARY" stop 2>/dev/null && ok "privacyclaw stop ok" || warn "stop failed or not running"
+else
+    warn "binary not found at $BINARY"
+fi
+# Kill any remaining process by PID file.
+if [ -f "$PID_FILE" ]; then
+    PID=$(cat "$PID_FILE" 2>/dev/null || echo "")
+    if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
+        kill "$PID" 2>/dev/null && ok "killed pid $PID" || warn "kill pid $PID failed"
+        sleep 1
+        kill -9 "$PID" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE" && ok "PID file removed"
+fi
+
+# ── 2. Unload + remove LaunchAgent: proxy ─────────────────────────────────────
+step "2. LaunchAgent: com.privacyclaw.proxy"
+PROXY_PLIST="$LAUNCH_AGENTS_DIR/com.privacyclaw.proxy.plist"
+if [ -f "$PROXY_PLIST" ]; then
+    launchctl bootout "gui/$USER_ID" "$PROXY_PLIST" 2>/dev/null || \
+        launchctl asuser "$USER_ID" launchctl unload -w "$PROXY_PLIST" 2>/dev/null || true
+    rm -f "$PROXY_PLIST" && ok "proxy LaunchAgent removed"
+else
+    warn "proxy LaunchAgent not present"
+fi
+
+# ── 3. Unload + remove LaunchAgent: env (NODE_EXTRA_CA_CERTS) ─────────────────
+step "3. LaunchAgent: com.privacyclaw.env"
+ENV_PLIST="$LAUNCH_AGENTS_DIR/com.privacyclaw.env.plist"
+if [ -f "$ENV_PLIST" ]; then
+    launchctl unload "$ENV_PLIST" 2>/dev/null || true
+    rm -f "$ENV_PLIST" && ok "env LaunchAgent removed"
+else
+    warn "env LaunchAgent not present"
+fi
+
+# ── 4. Unset launchctl env vars from current session ──────────────────────────
+step "4. launchctl env vars"
+launchctl unsetenv NODE_EXTRA_CA_CERTS 2>/dev/null && ok "unsetenv NODE_EXTRA_CA_CERTS" || warn "NODE_EXTRA_CA_CERTS was not set"
+launchctl unsetenv SSL_CERT_FILE 2>/dev/null && ok "unsetenv SSL_CERT_FILE" || warn "SSL_CERT_FILE was not set"
+# Also unset in the user session.
+launchctl asuser "$USER_ID" launchctl unsetenv NODE_EXTRA_CA_CERTS 2>/dev/null || true
+launchctl asuser "$USER_ID" launchctl unsetenv SSL_CERT_FILE 2>/dev/null || true
+ok "user-session env vars cleared"
+
+# ── 5. Unload + remove LaunchDaemon: pf ───────────────────────────────────────
+step "5. LaunchDaemon: com.privacyclaw.pf"
+if [ -f "$PF_PLIST" ]; then
+    launchctl bootout system "$PF_PLIST" 2>/dev/null || \
+        launchctl unload "$PF_PLIST" 2>/dev/null || true
+    rm -f "$PF_PLIST" && ok "pf LaunchDaemon removed"
+else
+    warn "pf LaunchDaemon not present"
+fi
+
+# ── 6. Clean pf anchor rules ──────────────────────────────────────────────────
+step "6. pf anchor rules"
+pfctl -a privacyclaw -F all 2>/dev/null && ok "pf anchor flushed" || warn "pf anchor had no rules or flush failed"
+if [ -f "$PF_ANCHOR_FILE" ]; then
+    rm -f "$PF_ANCHOR_FILE" && ok "anchor file removed: $PF_ANCHOR_FILE"
+else
+    warn "anchor file not present"
+fi
+
+# ── 7. Clean /etc/pf.conf ─────────────────────────────────────────────────────
+step "7. /etc/pf.conf"
+if grep -q 'privacyclaw' /etc/pf.conf 2>/dev/null; then
+    grep -v 'privacyclaw' /etc/pf.conf > /tmp/pf.conf.purge \
+        && mv /tmp/pf.conf.purge /etc/pf.conf \
+        && pfctl -ef /etc/pf.conf 2>/dev/null \
+        && ok "pf.conf cleaned and reloaded" \
+        || fail "failed to clean /etc/pf.conf"
+else
+    warn "no privacyclaw entries in /etc/pf.conf"
+fi
+
+# ── 8. Clean /etc/hosts ───────────────────────────────────────────────────────
+step "8. /etc/hosts"
+if grep -q 'privacyclaw' /etc/hosts 2>/dev/null; then
+    grep -v 'privacyclaw' /etc/hosts > /tmp/hosts.purge \
+        && mv /tmp/hosts.purge /etc/hosts \
+        && ok "/etc/hosts cleaned"
+    # Flush DNS cache.
+    dscacheutil -flushcache 2>/dev/null && killall -HUP mDNSResponder 2>/dev/null && ok "DNS cache flushed" || true
+else
+    warn "no privacyclaw entries in /etc/hosts"
+fi
+
+# ── 9. Remove CA from System keychain ─────────────────────────────────────────
+step "9. CA from System keychain"
+if [ -f "$CA_PEM" ]; then
+    security remove-trusted-cert -d "$CA_PEM" 2>/dev/null \
+        && ok "CA removed from System keychain" \
+        || warn "CA not in System keychain (already removed or never trusted)"
+else
+    warn "CA file not found — skipping keychain removal"
+fi
+
+# ── 10. Remove binary ─────────────────────────────────────────────────────────
+step "10. Binary"
+if [ -f "$BINARY" ]; then
+    rm -f "$BINARY" && ok "removed $BINARY"
+else
+    warn "binary not present at $BINARY"
+fi
+# Check other common bin locations.
+for loc in /usr/bin/privacyclaw /usr/local/sbin/privacyclaw; do
+    [ -f "$loc" ] && rm -f "$loc" && ok "removed $loc" || true
+done
+
+# ── 11. Remove shared data (/usr/local/share/privacyclaw) ─────────────────────
+step "11. Shared data"
+if [ -d "$SHARE_DIR" ]; then
+    rm -rf "$SHARE_DIR" && ok "removed $SHARE_DIR"
+else
+    warn "$SHARE_DIR not present"
+fi
+
+# ── 12. Remove user data ──────────────────────────────────────────────────────
+step "12. User data"
+if [ -d "$DATA_DIR" ]; then
+    rm -rf "$DATA_DIR" && ok "removed $DATA_DIR"
+else
+    warn "user data dir not present: $DATA_DIR"
+fi
+
+# ── Done ──────────────────────────────────────────────────────────────────────
+echo
+echo "[purge] ✓ Purge complete. System is clean."
+echo "[purge]   Verify with:"
+echo "[purge]     which privacyclaw          # should return nothing"
+echo "[purge]     launchctl list | grep priv # should return nothing"
+echo "[purge]     grep privacyclaw /etc/hosts /etc/pf.conf  # should return nothing"
