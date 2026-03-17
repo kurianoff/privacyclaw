@@ -17,7 +17,8 @@ Extract from the input:
 - `scope`: the code area being refactored (from Refactor-Plan handoff)
 - `boundaries`: do-not-touch zones (from Refactor-Plan handoff)
 - `branch`: the refactor branch (`refactor/<slug>`)
-- `task_list`: path to the task list (from Refactor-Plan handoff `Artifacts`)
+- `slug`: derived from `branch` (strip `refactor/` prefix)
+- `tasks_path`: `openspec/changes/refactor-<slug>/tasks.md` (from Refactor-Plan handoff `Artifacts`)
 - `for_next`: context from Refactor-Plan (parallel-safe tasks, risky tasks)
 - `RESUME_FROM`: optional `task-<id>` — skip all tasks before this one
 
@@ -153,14 +154,19 @@ If reverted or blocked, replace the Test Runner / Contrarian lines with:
 
 ## Task scheduling
 
-Read `<task_list>`. Build a dependency graph:
+Read `openspec/changes/refactor-<slug>/tasks.md`. Build a dependency graph
+from the `Depends on:` and `Parallel-safe:` fields in each task section:
 
-- **Independent** tasks (no overlapping files, no declared dependencies,
-  `parallel-safe: yes`) → eligible for parallel execution
+- **Independent** tasks (`Parallel-safe: yes`, no overlapping files, no
+  declared dependencies) → eligible for parallel execution
 - **Dependent** tasks → wait until all declared dependencies are merged
 
-If `RESUME_FROM: task-<id>` is set: skip all tasks marked `complete` or
-`reverted` in the refactor log. Start from task `<id>`.
+**Source of truth for task status:** the `- [ ]`/`- [x]` checkbox on each
+task's completion line in `tasks.md`. All agents read from and write to this
+file — never from memory.
+
+If `RESUME_FROM: task-<id>` is set: read `tasks.md` and skip every task
+whose checkbox already reads `- [x]`. Start from task `<id>`.
 
 ---
 
@@ -170,9 +176,10 @@ For each task (parallel where scheduling allows):
 
 ### Step 1 — Assign
 
-**Emit task-start progress report.** Mark in-progress in refactor log. Create
-worktree. Pass to Refactoring Engineer: task `id`, `title`, `changes`,
-`criterion`, `files`, branch name, scope, and boundaries.
+**Emit task-start progress report.** Append to refactor log. Create worktree.
+Pass to Refactoring Engineer: task `id`, `title`, `changes`, `criterion`,
+`files`, branch name, scope, and boundaries. Read all fields from
+`openspec/changes/refactor-<slug>/tasks.md`.
 
 ### Step 2 — Refactoring Engineer
 
@@ -229,7 +236,10 @@ then repeat Steps 3–5 (Simplifier → LogImpl → Test Runner).
 git worktree remove ../worktree-refactor-<id>
 ```
 
-Record `Status: reverted`. **Emit task-complete progress report (reverted ✗)
+In `openspec/changes/refactor-<slug>/tasks.md`, update the task's checkbox:
+`- [ ] T<id> complete` → `- [ ] T<id> complete — ✗ REVERTED: <reason>`
+
+Append to refactor log. **Emit task-complete progress report (reverted ✗)
 with running tally.** Move to next task.
 
 ### Step 6 — Contrarian: structure gate
@@ -250,9 +260,12 @@ Invoke **contrarian** with the full handoff chain (Steps 2–5). Task:
 > - `[BEHAVIOR]` — behavior change risk → route to RE, restart from Step 2,
 >   must re-run Test Runner
 
-**Maximum Contrarian rounds: 3.** If not approved: record as blocked,
-**emit task-complete progress report (blocked ⚠) with running tally,**
-surface to orchestrator in Phase Handoff `Open`, do not merge.
+**Maximum Contrarian rounds: 3.** If not approved: in
+`openspec/changes/refactor-<slug>/tasks.md` update the task's checkbox:
+`- [ ] T<id> complete` → `- [ ] T<id> complete — ⚠ BLOCKED: <reason>`
+
+Append to refactor log. **Emit task-complete progress report (blocked ⚠)
+with running tally.** Surface in Phase Handoff `Open`. Do not merge.
 
 ### Step 7 — Merge, clean up team, log
 
@@ -260,7 +273,9 @@ After Contrarian approval:
 
 **Emit task-complete progress report** (merged ✓) with running tally.
 
-1. Shut down task team:
+1. In `openspec/changes/refactor-<slug>/tasks.md`, mark the task done:
+   `- [ ] T<id> complete` → `- [x] T<id> complete`
+2. Shut down task team:
    ```text
    SendMessage({ to: "refactoring-engineer", message: {type: "shutdown_request"} })
    SendMessage({ to: "simplifier",           message: {type: "shutdown_request"} })
@@ -269,9 +284,9 @@ After Contrarian approval:
    SendMessage({ to: "contrarian",           message: {type: "shutdown_request"} })
    TeamDelete()
    ```
-2. Merge task branch into `refactor/<slug>`.
-3. Mark complete in refactor log.
-4. Move to next task.
+3. Merge task branch into `refactor/<slug>`.
+4. Append to refactor log.
+5. Move to next task.
 
 ---
 
@@ -306,6 +321,7 @@ Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
 Artifacts:
+  openspec/changes/refactor-<slug>/tasks.md
   .claude/workflow/<slug>/refactor-log.md
   .claude/workflow/<slug>/baseline-tests.txt
   .claude/workflow/<slug>/final-tests.txt

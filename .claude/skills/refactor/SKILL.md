@@ -178,7 +178,7 @@ Wait for direction before continuing.
 ## Step 4 — Invoke Phase 3: Refactor-Execute
 
 When resuming at `refactor-execute` or `task-<id>`, load the Refactor-Plan handoff from
-`.claude/workflow/<slug>/task-list.md`. Append `RESUME_FROM: task-<id>` to
+`openspec/changes/refactor-<slug>/tasks.md`. Append `RESUME_FROM: task-<id>` to
 the arguments if resuming mid-execution.
 
 ```text

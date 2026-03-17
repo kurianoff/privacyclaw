@@ -1,6 +1,6 @@
 ---
 name: refactor-plan
-description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware refactoring task list. Contrarian challenges the plan for behavior risk, task granularity, sequencing, and boundary safety. Saves the finalized task list to task-list.md. Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
+description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware task list. Contrarian challenges for behavior risk, granularity, sequencing, and boundary safety. Saves the plan as an OpenSpec change (proposal.md + tasks.md). Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
 argument-hint: "<refactor-investigate phase handoff> [USER_EXCLUSIONS: <additional exclusions>]"
 context: fork
 ---
@@ -111,27 +111,55 @@ Pass the Contrarian handoff back to **architect**. Task:
 response, surface them to the orchestrator in the `Open` field of the Phase
 Handoff — the orchestrator will ask the user for direction.
 
-### Step 3 — Save task list
+### Step 3 — Create OpenSpec change
 
-Save the finalized task list to `.claude/workflow/<slug>/task-list.md`:
+Create `openspec/changes/refactor-<slug>/`.
+
+**`proposal.md`**:
 
 ```markdown
-# Refactoring Task List
+# Refactor: <scope>
 
-Scope: <scope>
-Boundaries: <boundaries or none>
-Branch: <branch>
-Total tasks: <N>
+## Why
+Structural smells catalogued by Refactor-Investigate. No behavior change.
 
-## Task T<N>: <title>
-Smells: <smell IDs>
-Files:
-  - <file>:<line range>
-Changes: <what to do>
-Criterion: <verification test>
-Depends on: <task IDs or "none">
-Parallel-safe: yes | no — <reason if no>
+## What Changes
+<bullet list of task titles>
+
+## Impact
+- Affected code: <all files across all tasks>
+- Boundaries (do not touch): <boundaries or none>
 ```
+
+**`tasks.md`** — one section per task, in execution order:
+
+```markdown
+# Tasks: Refactor <scope>
+
+Run `cargo test && cargo clippy -- -D warnings` after every merged task.
+
+---
+
+## T<id>: <title>
+
+Smells: <smell IDs>
+Files: `<file>:<line range>` (one per line)
+Depends on: <task IDs or none>
+Parallel-safe: yes | no — <reason if no>
+
+Changes: <what to do>
+
+Criterion: <verification test>
+
+- [ ] T<id> complete
+
+---
+```
+
+**Task status convention** (updated by Refactor-Execute):
+- Done: `- [x] T<id> complete`
+- Reverted: `- [ ] T<id> complete — ✗ REVERTED: <reason>`
+- Blocked: `- [ ] T<id> complete — ⚠ BLOCKED: <reason>`
 
 ---
 
@@ -155,7 +183,7 @@ Phase:     Refactor-Plan
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
-Artifacts: .claude/workflow/<slug>/task-list.md
+Artifacts: openspec/changes/refactor-<slug>/tasks.md
 Decisions:
   - <key task grouping and sequencing decisions>
   - <Contrarian challenges resolved or dismissed>
