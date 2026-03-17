@@ -917,140 +917,6 @@ async fn cmd_stop() -> Result<()> {
     }
 }
 
-/// Set NODE_EXTRA_CA_CERTS in the current launchd session and persist it via a
-/// LaunchAgent plist so GUI apps (VSCode / Electron) inherit it across reboots.
-#[cfg(target_os = "macos")]
-pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
-    let ca_str = ca_pem.display().to_string();
-
-    // Set for the current session.
-    match std::process::Command::new("launchctl")
-        .args(["setenv", "NODE_EXTRA_CA_CERTS", &ca_str])
-        .status()
-    {
-        Ok(s) if s.success() => {
-            tracing::info!(ca = %ca_str, "launchctl setenv NODE_EXTRA_CA_CERTS ok");
-        }
-        Ok(s) => tracing::warn!(status = %s, "launchctl setenv NODE_EXTRA_CA_CERTS failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl setenv NODE_EXTRA_CA_CERTS error"),
-    }
-
-    // Write the LaunchAgent plist.
-    let plist_path = match dirs::home_dir() {
-        Some(h) => h.join("Library/LaunchAgents/com.privacyclaw.env.plist"),
-        None => {
-            tracing::warn!("cannot determine home dir; skipping LaunchAgent plist");
-            return;
-        }
-    };
-    let plist_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.privacyclaw.env</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/launchctl</string>
-    <string>setenv</string>
-    <string>NODE_EXTRA_CA_CERTS</string>
-    <string>{ca}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-"#,
-        ca = ca_str
-    );
-
-    if let Some(parent) = plist_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!(err = %e, "failed to create LaunchAgents dir");
-            return;
-        }
-    }
-
-    if let Err(e) = std::fs::write(&plist_path, &plist_content) {
-        tracing::warn!(err = %e, path = %plist_path.display(), "failed to write LaunchAgent plist");
-        return;
-    }
-    tracing::info!(path = %plist_path.display(), "LaunchAgent plist written");
-
-    // Load the plist (non-fatal on failure).
-    match std::process::Command::new("launchctl")
-        .args(["load", &plist_path.display().to_string()])
-        .status()
-    {
-        Ok(s) if s.success() => {
-            tracing::info!(path = %plist_path.display(), "LaunchAgent plist loaded");
-        }
-        Ok(s) => tracing::warn!(status = %s, path = %plist_path.display(), "launchctl load plist failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl load plist error"),
-    }
-}
-
-/// Undo NODE_EXTRA_CA_CERTS: unset from current session and remove the LaunchAgent plist.
-#[cfg(target_os = "macos")]
-pub(crate) fn launchctl_unset_node_ca() {
-    match std::process::Command::new("launchctl")
-        .args(["unsetenv", "NODE_EXTRA_CA_CERTS"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("launchctl unsetenv NODE_EXTRA_CA_CERTS ok"),
-        Ok(s) => tracing::warn!(status = %s, "launchctl unsetenv NODE_EXTRA_CA_CERTS failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl unsetenv NODE_EXTRA_CA_CERTS error"),
-    }
-
-    let plist_path = match dirs::home_dir() {
-        Some(h) => h.join("Library/LaunchAgents/com.privacyclaw.env.plist"),
-        None => {
-            tracing::warn!("cannot determine home dir; skipping LaunchAgent plist removal");
-            return;
-        }
-    };
-
-    if plist_path.exists() {
-        match std::process::Command::new("launchctl")
-            .args(["unload", &plist_path.display().to_string()])
-            .status()
-        {
-            Ok(s) if s.success() => tracing::info!(path = %plist_path.display(), "LaunchAgent plist unloaded"),
-            Ok(s) => tracing::warn!(status = %s, path = %plist_path.display(), "launchctl unload plist failed"),
-            Err(e) => tracing::warn!(err = %e, "launchctl unload plist error"),
-        }
-
-        if let Err(e) = std::fs::remove_file(&plist_path) {
-            tracing::warn!(err = %e, path = %plist_path.display(), "failed to remove LaunchAgent plist");
-        } else {
-            tracing::info!(path = %plist_path.display(), "LaunchAgent plist removed");
-        }
-    }
-}
-
-/// Flush the macOS DNS cache. Failures are non-fatal.
-#[cfg(target_os = "macos")]
-fn flush_dns_cache() {
-    match std::process::Command::new("sudo")
-        .args(["dscacheutil", "-flushcache"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("dscacheutil -flushcache ok"),
-        Ok(s) => tracing::warn!(status = %s, "dscacheutil -flushcache failed"),
-        Err(e) => tracing::warn!(err = %e, "dscacheutil -flushcache error"),
-    }
-
-    match std::process::Command::new("sudo")
-        .args(["killall", "-HUP", "mDNSResponder"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("mDNSResponder HUP ok"),
-        Ok(s) => tracing::warn!(status = %s, "mDNSResponder HUP failed"),
-        Err(e) => tracing::warn!(err = %e, "mDNSResponder HUP error"),
-    }
-}
-
 async fn cmd_network_enable(cfg: &Config) -> Result<()> {
     let domains: Vec<&str> = cfg.intercept.domains.iter().map(|s| s.as_str()).collect();
     let port: u16 = cfg.network_proxy.listen
@@ -1066,8 +932,8 @@ async fn cmd_network_enable(cfg: &Config) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let ca_pem = ca::ca_cert_path(&default_ca_dir());
-        launchctl_set_node_ca(&ca_pem);
-        flush_dns_cache();
+        network_helper::launchctl_set_node_ca(&ca_pem);
+        network_helper::flush_dns_cache();
     }
 
     println!("Network proxy enabled. Start the proxy with: privacyclaw network-start");
@@ -1084,8 +950,8 @@ async fn cmd_network_disable() -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        launchctl_unset_node_ca();
-        flush_dns_cache();
+        network_helper::launchctl_unset_node_ca();
+        network_helper::flush_dns_cache();
     }
 
     println!("Network proxy disabled.");

@@ -924,7 +924,7 @@ fn stop_proxy(state: &mut TrayState) {
             if let Err(e) = crate::network_helper::disable() {
                 tracing::warn!(err = %e, "network proxy disable on stop_proxy failed");
             } else {
-                crate::launchctl_unset_node_ca();
+                crate::network_helper::launchctl_unset_node_ca();
             }
         });
     }
@@ -1096,7 +1096,7 @@ pub fn run(
                     let result = if enabled {
                         let r = crate::network_helper::disable();
                         if r.is_ok() {
-                            crate::launchctl_unset_node_ca();
+                            crate::network_helper::launchctl_unset_node_ca();
                             patch_network_enabled(&dashboard2, false);
                         }
                         r
@@ -1105,7 +1105,7 @@ pub fn run(
                         let r = crate::network_helper::enable(&d, port2);
                         if r.is_ok() {
                             let ca_pem = crate::ca::ca_cert_path(&default_ca_dir());
-                            crate::launchctl_set_node_ca(&ca_pem);
+                            crate::network_helper::launchctl_set_node_ca(&ca_pem);
                             patch_network_enabled(&dashboard2, true);
                         }
                         r
