@@ -169,6 +169,23 @@ to pass, return a blocked Phase Handoff with the validation errors in `Open`.
 
 ---
 
+## Team cleanup
+
+If `TeamCreate` succeeded earlier, shut down all agents and delete the team
+**before** producing the Phase Handoff:
+
+```text
+SendMessage({ to: "pm",           message: {type: "shutdown_request"} })
+SendMessage({ to: "architect",    message: {type: "shutdown_request"} })
+SendMessage({ to: "investigator", message: {type: "shutdown_request"} })
+SendMessage({ to: "contrarian",   message: {type: "shutdown_request"} })
+TeamDelete()
+```
+
+If `TeamCreate` was never called (sequential fallback path), skip this section.
+
+---
+
 ## Phase completion
 
 Phase 2 is complete when:

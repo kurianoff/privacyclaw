@@ -226,13 +226,38 @@ verdict is **approved**.
 Contrarian rounds, record it as blocked in the implementation log and surface
 it to the user before continuing to the next task.
 
-### Step 9 — Merge and log
+### Step 9 — Merge, clean up team, and log
 
 After Contrarian approval:
 
-1. Merge the task branch into the feature branch (see worktree protocol above).
-2. Mark the task complete in the implementation log with the Contrarian verdict.
-3. Move to the next task.
+1. If `TeamCreate` succeeded for this task's team, shut down all agents and
+   delete the team before merging:
+   ```text
+   SendMessage({ to: "developer",            message: {type: "shutdown_request"} })
+   SendMessage({ to: "refactoring-engineer", message: {type: "shutdown_request"} })
+   SendMessage({ to: "simplifier",           message: {type: "shutdown_request"} })
+   SendMessage({ to: "logging-implementer",  message: {type: "shutdown_request"} })
+   SendMessage({ to: "contrarian",           message: {type: "shutdown_request"} })
+   TeamDelete()
+   ```
+2. Merge the task branch into the feature branch (see worktree protocol above).
+3. Mark the task complete in the implementation log with the Contrarian verdict.
+4. Move to the next task.
+
+---
+
+## Team cleanup (safety net)
+
+If any per-task team was not cleaned up in Step 9 (e.g. a task was blocked and
+the cycle was interrupted), delete it now before producing the Phase Handoff:
+
+```text
+# For each task team still open:
+SendMessage({ to: "<agent>", message: {type: "shutdown_request"} })  # repeat per member
+TeamDelete()
+```
+
+If all task teams were already cleaned up in Step 9, skip this section.
 
 ---
 

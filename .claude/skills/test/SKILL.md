@@ -169,6 +169,24 @@ This loop continues until Test Runner verdict is "all pass".
 
 ---
 
+## Team cleanup
+
+If `TeamCreate` succeeded earlier, shut down all agents and delete the team
+**before** producing the Phase Handoff:
+
+```text
+SendMessage({ to: "pm",             message: {type: "shutdown_request"} })
+SendMessage({ to: "architect",      message: {type: "shutdown_request"} })
+SendMessage({ to: "test-developer", message: {type: "shutdown_request"} })
+SendMessage({ to: "stress-tester",  message: {type: "shutdown_request"} })
+SendMessage({ to: "test-runner",    message: {type: "shutdown_request"} })
+TeamDelete()
+```
+
+If `TeamCreate` was never called (sequential fallback path), skip this section.
+
+---
+
 ## Phase completion
 
 Phase 4 is complete when:
