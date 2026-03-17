@@ -853,22 +853,37 @@ fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
 
 // ── Proxy lifecycle helpers ───────────────────────────────────────────────────
 
+/// Spawn a single HTTP CONNECT listener task on the given runtime handle.
+///
+/// Used by `start_proxy` and the HTTP toggle handler — both call sites are
+/// identical, so the spawn logic is centralised here.
+fn spawn_http_proxy(
+    rt: &tokio::runtime::Handle,
+    cfg: std::sync::Arc<crate::config::Config>,
+    cert_cache: crate::ca::cert_gen::CertCache,
+    store: crate::storage::Store,
+    ws_tx: tokio::sync::broadcast::Sender<crate::dashboard::WsEvent>,
+    pii: crate::pii::PiiCtx,
+) -> tokio::task::JoinHandle<()> {
+    rt.spawn(async move {
+        if let Err(e) = crate::proxy::run(cfg, cert_cache, store, ws_tx, pii).await {
+            tracing::error!(err = %e, "CONNECT proxy task exited with error");
+        }
+    })
+}
+
 /// Spawn the HTTP CONNECT and network proxy listener tasks and record them in `state`.
 ///
 /// Sets `state.proxy_running = true` and `state.http_listener_on = true`.
 fn start_proxy(state: &mut TrayState) {
-    let (c, cc, s, w, p) = (
+    let http_handle = spawn_http_proxy(
+        &state.rt,
         state.cfg.clone(),
         state.cert_cache.clone(),
         state.store.clone(),
         state.ws_tx.clone(),
         state.pii.clone(),
     );
-    let http_handle = state.rt.spawn(async move {
-        if let Err(e) = crate::proxy::run(c, cc, s, w, p).await {
-            tracing::error!(err = %e, "CONNECT proxy task exited with error");
-        }
-    });
     state.http_task = Some(http_handle);
 
     let (c2, cc2, s2, w2, p2) = (
@@ -1041,18 +1056,14 @@ pub fn run(
                         tracing::info!("HTTP proxy listener toggled off");
                     } else {
                         // Listener is stopped — spawn it again.
-                        let (c, cc, s, w, p) = (
+                        let handle = spawn_http_proxy(
+                            &state.rt,
                             state.cfg.clone(),
                             state.cert_cache.clone(),
                             state.store.clone(),
                             state.ws_tx.clone(),
                             state.pii.clone(),
                         );
-                        let handle = state.rt.spawn(async move {
-                            if let Err(e) = crate::proxy::run(c, cc, s, w, p).await {
-                                tracing::error!(err = %e, "CONNECT proxy task exited with error");
-                            }
-                        });
                         state.http_task = Some(handle);
                         state.http_listener_on = true;
                         tracing::info!("HTTP proxy listener toggled on");
