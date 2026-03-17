@@ -71,14 +71,15 @@ fi
 
 ---
 
-## Step 1 — Build universal release binary
+## Step 1 — Build universal release binary and .app bundle
 
 ```bash
-make release-app
+make app
 ```
 
 This compiles both `aarch64-apple-darwin` and `x86_64-apple-darwin` with
-`--release --features tray` and produces `dist/privacyclaw` (universal via lipo).
+`--release --features tray`, produces `dist/privacyclaw` (universal via lipo),
+and assembles `dist/Privacyclaw.app` with the correct `Info.plist` and launch script.
 
 Build must succeed with exit code 0.
 
@@ -206,6 +207,20 @@ If `SIGN_PKG` is empty: `PKG_FINAL="dist/privacyclaw-${VERSION}.pkg"` (unsigned)
 
 ---
 
+## Step 7b — Build .dmg
+
+```bash
+make dmg
+```
+
+This wraps `dist/Privacyclaw.app` into `dist/privacyclaw-<VERSION>.dmg` using
+`hdiutil`. The `.app` was already built in Step 1 so this is fast.
+
+Verify `dist/privacyclaw-${VERSION}.dmg` exists after make exits.
+Record path as `DMG_PATH="dist/privacyclaw-${VERSION}.dmg"`.
+
+---
+
 ## Step 8 — Notarize .pkg (if credentials available)
 
 If `NOTARIZE=true`:
@@ -291,6 +306,8 @@ Tarballs:
   arm64 SHA:  <SHA_ARM64>
   x86_64:     dist/privacyclaw-<VERSION>-x86_64-apple-darwin.tar.gz
   x86_64 SHA: <SHA_X86>
+App:          dist/Privacyclaw.app
+DMG:          dist/privacyclaw-<VERSION>.dmg
 PKG:          <PKG_FINAL>
 PKG signed:   <yes | no>
 PKG notarized:<yes | no>

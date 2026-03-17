@@ -931,12 +931,17 @@ fn handle_http_toggle(state: &mut TrayState) -> bool {
 }
 
 /// Toggle network routing in a background thread (requires osascript admin dialog).
-fn handle_network_toggle(domains: &[String], port: u16, dashboard_url: &str) {
+///
+/// `currently_on` is the UI's authoritative state — the direction the toggle should
+/// move FROM.  Do NOT re-read `/etc/hosts` here: the tray's `current_network_on`
+/// (driven by `/api/config` polls) is the single source of truth and can diverge
+/// from stale `/etc/hosts` entries left by a previous crash or force-quit.
+fn handle_network_toggle(currently_on: bool, domains: &[String], port: u16, dashboard_url: &str) {
     let domains2 = domains.to_vec();
     let port2 = port;
     let dashboard2 = dashboard_url.to_string();
     std::thread::spawn(move || {
-        let enabled = crate::network_helper::is_enabled();
+        let enabled = currently_on;
         tracing::debug!(currently_enabled = enabled, "network proxy toggle requested");
         let result = if enabled {
             let r = crate::network_helper::disable();
@@ -1157,7 +1162,13 @@ pub fn run(
             } else if ev.id == ids.network_proxy {
                 // Running in-process ensures the tray's window-server connection
                 // is inherited by osascript so the admin dialog appears correctly.
-                handle_network_toggle(&domains, proxy_port, &dashboard_url);
+                // Pass current_network_on as authoritative state so the toggle
+                // direction matches what the UI shows, not a stale /etc/hosts read.
+                handle_network_toggle(current_network_on, &domains, proxy_port, &dashboard_url);
+                // Optimistically flip the checkmark immediately; the next /api/config
+                // poll will correct it back if osascript was cancelled or the toggle failed.
+                current_network_on = !current_network_on;
+                ids = rebuild_menu(&tray, &state, current_network_on, &current_pii_level);
 
             } else if let Some(level) = pii_level_for_id(&ev.id, &ids) {
                 handle_pii_level(level);

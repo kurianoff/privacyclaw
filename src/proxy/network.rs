@@ -5,7 +5,7 @@ use crate::storage::Store;
 use anyhow::{Context, Result};
 use rustls::pki_types::ServerName;
 use rustls::{ClientConfig, RootCertStore, ServerConfig};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::Duration;
 use std::sync::Arc;
 use tokio::net::{TcpListener, TcpStream, UdpSocket};
@@ -43,9 +43,18 @@ pub async fn run(
     server_cfg.alpn_protocols = vec![b"http/1.1".to_vec()];
     let acceptor = TlsAcceptor::from(Arc::new(server_cfg));
 
-    let listener = TcpListener::bind(addr).await
+    let listener4 = TcpListener::bind(addr).await
         .with_context(|| format!("Network proxy failed to bind on {}", addr))?;
     tracing::warn!(addr = %addr, "network proxy bound");
+
+    // Also bind on ::1 (IPv6 loopback) at the same port so that Chromium-based apps
+    // (which prefer IPv6 when /etc/hosts has both 127.0.0.1 and ::1 entries) are
+    // intercepted by the same pf rdr rule that redirects ::1:443 → ::1:16441.
+    let port = listener4.local_addr()?.port();
+    let v6_addr = SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port);
+    let listener6 = TcpListener::bind(v6_addr).await
+        .with_context(|| format!("Network proxy failed to bind on {}", v6_addr))?;
+    tracing::warn!(addr = %v6_addr, "network proxy bound (IPv6)");
 
     // Build upstream TLS client config once — shared across all connections via Arc.
     // Use http/1.1 only upstream to match the forced client downgrade above.
@@ -58,16 +67,23 @@ pub async fn run(
     let client_cfg = Arc::new(upstream_client_cfg);
 
     loop {
-        let (stream, peer_addr) = match listener.accept().await {
-            Ok(conn) => conn,
-            Err(e) => {
-                // Transient errors (EMFILE, ENFILE, ECONNABORTED) must not kill
-                // the accept loop — the proxy would stop handling all new connections.
-                tracing::warn!("Network proxy: accept() error: {}", e);
-                // Brief pause to avoid spinning on persistent resource exhaustion.
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                continue;
-            }
+        let (stream, peer_addr) = tokio::select! {
+            res = listener4.accept() => match res {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::warn!("Network proxy (IPv4): accept() error: {}", e);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            },
+            res = listener6.accept() => match res {
+                Ok(conn) => conn,
+                Err(e) => {
+                    tracing::warn!("Network proxy (IPv6): accept() error: {}", e);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            },
         };
         tracing::warn!(peer_addr = %peer_addr, "network: accepted connection");
 
