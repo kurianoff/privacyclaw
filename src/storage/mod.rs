@@ -263,6 +263,25 @@ impl Store {
         Self::read_messages(&path)
     }
 
+    /// Fetch a single conversation by its ID.
+    ///
+    /// Uses `conv_file_path` (which after T7 benefits from the path cache) to
+    /// locate the file directly, avoiding the O(N_files) scan that
+    /// `list_conversations` would perform.
+    ///
+    /// Returns `None` when no conversation with the given ID exists.
+    pub fn get_conversation_by_id(&self, conv_id: &str) -> Option<Conversation> {
+        let path = self.conv_file_path(conv_id)?;
+        tracing::debug!(conv_id = %conv_id, path = %path.display(), "storage: get_conversation_by_id");
+        match Self::read_conv_header(&path) {
+            Ok(conv) => Some(conv),
+            Err(e) => {
+                tracing::warn!(conv_id = %conv_id, err = %e, "storage: get_conversation_by_id: read failed");
+                None
+            }
+        }
+    }
+
     /// Find a today's conversation by provider + fingerprint.
     /// Reads only line 1 of each today's file — O(N_today × header_size).
     pub fn find_conversation_by_fingerprint(

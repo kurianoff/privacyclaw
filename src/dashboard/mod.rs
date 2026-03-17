@@ -541,8 +541,7 @@ async fn handle_http(
         }
         p if p.starts_with("/api/conversations/") => {
             let id = p.trim_start_matches("/api/conversations/");
-            let convs = store.list_conversations(50).unwrap_or_default();
-            let conv = convs.into_iter().find(|c| c.id == id);
+            let conv = store.get_conversation_by_id(id);
             let msgs = store.get_messages(id).unwrap_or_default();
             let json = serde_json::to_vec(&serde_json::json!({
                 "conversation": conv,
