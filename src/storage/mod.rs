@@ -292,7 +292,11 @@ impl Store {
     }
 
     /// Count request-direction messages stored for a conversation.
-    /// Sequential line scan — no JSON tree allocation for the whole file.
+    ///
+    /// Uses JSON parsing rather than substring matching to avoid false positives
+    /// when message bodies contain the literal string `"direction":"request"`.
+    /// Lines that fail to parse (vault/detection lines) return `false` and are
+    /// skipped, preserving the existing skip-first-line behaviour.
     pub fn count_request_messages(&self, conversation_id: &str) -> usize {
         let Some(path) = self.conv_file_path(conversation_id) else {
             return 0;
@@ -307,7 +311,10 @@ impl Store {
             .filter(|(i, line)| {
                 if *i == 0 { return false; } // skip conv header
                 line.as_ref()
-                    .map(|l| l.contains("\"direction\":\"request\""))
+                    .map(|l| {
+                        serde_json::from_str::<Message>(l)
+                            .map_or(false, |m| m.direction == "request")
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -702,6 +709,35 @@ mod tests {
         store.batch_insert_messages(&resp_msgs).unwrap();
         let count = store.count_request_messages("conv-1");
         assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_count_request_messages_no_false_positive_in_body() {
+        // A response message whose body contains the literal substring
+        // `"direction":"request"` must NOT be counted.
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-fp", "anthropic", "fp-fp");
+        store.insert_conversation(&conv).unwrap();
+
+        let tricky = Message {
+            id: "tricky".to_string(),
+            conversation_id: "conv-fp".to_string(),
+            direction: "response".to_string(),
+            timestamp: "2026-03-17T00:00:00Z".to_string(),
+            role: Some("assistant".to_string()),
+            content: r#"The JSON has "direction":"request" in the body"#.to_string(),
+            tokens_in: None,
+            tokens_out: None,
+            content_masked: None,
+            pii_processed: None,
+        };
+        store.insert_message(&tricky).unwrap();
+
+        let real_req = make_msg("real-req", "conv-fp", "request");
+        store.insert_message(&real_req).unwrap();
+
+        let count = store.count_request_messages("conv-fp");
+        assert_eq!(count, 1, "only the real request should be counted");
     }
 
     // ── 3.3 Concurrency ───────────────────────────────────────────────────────
