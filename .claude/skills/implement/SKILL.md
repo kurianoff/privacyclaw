@@ -67,6 +67,60 @@ so it survives context compaction. Append each handoff as it arrives.
 
 ---
 
+## User progress report format
+
+After **every** phase completes, post a progress report to the user **before**
+invoking the next phase. Use this exact structure (plain prose, no code block):
+
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+✅ Phase <N> — <Phase Name> complete
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+**What happened**
+<2–4 sentences describing what the agents did, what they disagreed on,
+what they resolved, and how. Name the agents involved. Be concrete —
+e.g. "Contrarian challenged X; Architect dismissed it because Y and
+instead revised Z.">
+
+**Key decisions**
+<bullet list of the most important decisions, each with a one-line rationale>
+
+**Artifacts created / modified**
+<bullet list of every file path from the handoff Artifacts field, with a
+one-sentence description of what each file contains>
+
+**What goes to Phase <N+1>**
+<verbatim "For next:" field from the Phase Handoff, so the user can see
+exactly what context is being carried forward>
+
+**Open items** (if any)
+<list, or omit this section entirely if none>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+```
+
+This report is mandatory. Never skip it or replace it with a brief note.
+
+---
+
+## User check-in policy
+
+After **Phase 1 (Design)** and **Phase 2 (Planning)**, pause after the
+progress report and explicitly ask the user:
+
+> "Ready to proceed to Phase <N+1>? Or would you like to review anything
+> before I continue?"
+
+Wait for an explicit "yes" / "proceed" / "continue" before invoking the
+next phase. This gives the user a chance to redirect before development
+work begins.
+
+After **Phase 3 (Development)** and **Phase 4 (Testing)**, post the
+progress report and proceed automatically (no pause needed — the expensive
+work is already done by that point).
+
+---
+
 ## Step 1 — Git setup
 
 Derive a slug from the feature description (lowercase, hyphens, max 40 chars).
@@ -77,8 +131,7 @@ git checkout -b feature/<slug>
 mkdir -p .claude/workflow/<slug>
 ```
 
-Record the branch name. All phases operate on `feature/<slug>`. The branch
-merges to `main` only after Phase 4 passes completely.
+Tell the user: "Branch `feature/<slug>` created. Starting Phase 1 — Design."
 
 ---
 
@@ -90,12 +143,18 @@ Skill("design", "<feature description>\nBRANCH: feature/<slug>")
 
 Wait for the Phase Handoff. Append it to `.claude/workflow/<slug>/phase-log.md`.
 
+**Post the Phase 1 progress report** (see User progress report format above).
+
 If the handoff `Status` is `blocked`, surface the `Open` items to the user and
 wait for a response before continuing.
+
+**User check-in:** ask the user to confirm before proceeding to Planning.
 
 ---
 
 ## Step 3 — Invoke Phase 2: Planning
+
+Tell the user: "Starting Phase 2 — Planning."
 
 Pass the Design handoff as context:
 
@@ -105,11 +164,18 @@ Skill("plan", "<design handoff content>")
 
 Wait for the Phase Handoff. Append to phase log.
 
+**Post the Phase 2 progress report.**
+
 If blocked, surface to user and wait.
+
+**User check-in:** ask the user to confirm before proceeding to Development.
 
 ---
 
 ## Step 4 — Invoke Phase 3: Development
+
+Tell the user: "Starting Phase 3 — Development. This phase implements all
+tasks — it may take a while."
 
 Pass the Planning handoff as context:
 
@@ -119,12 +185,16 @@ Skill("develop", "<plan handoff content>")
 
 Wait for the Phase Handoff. Append to phase log.
 
+**Post the Phase 3 progress report.** Proceed automatically to Testing.
+
 If the develop skill reports that Phase 3 was interrupted (e.g. a task re-run
 loop exceeded a threshold), surface the issue to the user before continuing.
 
 ---
 
 ## Step 5 — Invoke Phase 4: Testing
+
+Tell the user: "Starting Phase 4 — Testing."
 
 Pass the Development handoff as context:
 
@@ -133,6 +203,8 @@ Skill("test", "<develop handoff content>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
+
+**Post the Phase 4 progress report.** Proceed automatically to final merge.
 
 ---
 
