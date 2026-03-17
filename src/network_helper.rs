@@ -265,7 +265,7 @@ pub fn is_enabled() -> bool {
 /// Set NODE_EXTRA_CA_CERTS in the current launchd session and persist it via a
 /// LaunchAgent plist so GUI apps (VSCode / Electron) inherit it across reboots.
 #[cfg(target_os = "macos")]
-pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
+pub fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
     let ca_str = ca_pem.display().to_string();
 
     // Set for the current session.
@@ -338,7 +338,7 @@ pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
 
 /// Undo NODE_EXTRA_CA_CERTS: unset from current session and remove the LaunchAgent plist.
 #[cfg(target_os = "macos")]
-pub(crate) fn launchctl_unset_node_ca() {
+pub fn launchctl_unset_node_ca() {
     match std::process::Command::new("launchctl")
         .args(["unsetenv", "NODE_EXTRA_CA_CERTS"])
         .status()
@@ -376,7 +376,7 @@ pub(crate) fn launchctl_unset_node_ca() {
 
 /// Flush the macOS DNS cache. Failures are non-fatal.
 #[cfg(target_os = "macos")]
-pub(crate) fn flush_dns_cache() {
+pub fn flush_dns_cache() {
     match std::process::Command::new("sudo")
         .args(["dscacheutil", "-flushcache"])
         .status()
