@@ -17,7 +17,7 @@ Input: **$ARGUMENTS**
 Extract from the input:
 - `scope`: the code area to refactor
 - `boundaries`: "DO NOT TOUCH" zones. Record as `none` if omitted.
-- `RESUME_FROM`: optional — `catalog`, `blueprint`, `execute`, or `task-<id>`
+- `RESUME_FROM`: optional — `refactor-investigate`, `refactor-plan`, `refactor-execute`, or `task-<id>`
 - `SLUG`: required when resuming — the existing run's slug
 
 Derive a slug from the scope (lowercase, hyphens, max 40 chars).
@@ -47,7 +47,7 @@ This orchestrator mirrors the `implement` and `modernize` architecture:
 
 ```text
 === PHASE HANDOFF ===
-Phase:     <Catalog | Blueprint | Execute>
+Phase:     <Refactor-Investigate | Refactor-Plan | Refactor-Execute>
 Status:    <complete | blocked — reason>
 Scope:     <scope>
 Branch:    refactor/<slug>
@@ -93,25 +93,25 @@ challenged and how Architect responded. Be concrete.>
 
 ## User check-in policy
 
-**After Phase 1 (Catalog):** pause and present the smell summary. Ask:
+**After Phase 1 (Refactor-Investigate):** pause and present the smell summary. Ask:
 
-> "Catalog complete. Found <N> smells (high: <N>, medium: <N>, low: <N>).
+> "Refactor-Investigate complete. Found <N> smells (high: <N>, medium: <N>, low: <N>).
 > Excluded by Contrarian: <list or none>.
-> Proceed to Blueprint? Or adjust scope?
+> Proceed to Refactor-Plan? Or adjust scope?
 >
-> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: blueprint`"
+> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: Refactor-Plan`"
 
 Wait for explicit confirmation. Incorporate any user-added exclusions into
-the handoff passed to Blueprint.
+the handoff passed to Refactor-Plan.
 
-**After Phase 2 (Blueprint):** pause and present the task plan. Ask:
+**After Phase 2 (Refactor-Plan):** pause and present the task plan. Ask:
 
-> "Blueprint complete. <N> tasks planned across <N> files.
+> "Refactor-Plan complete. <N> tasks planned across <N> files.
 > Contrarian challenges resolved: <summary>.
 > Unresolved critical items (if any): <list>.
 > Proceed to Execute?
 >
-> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: execute`"
+> To resume here later: `/refactor SLUG: <slug> RESUME_FROM: refactor-execute`"
 
 Wait for explicit confirmation.
 
@@ -134,13 +134,13 @@ cargo test 2>&1 | tee .claude/workflow/<slug>/baseline-tests.txt
 If resuming and branch already exists: verify it is clean and ahead of main.
 If `.claude/workflow/<slug>/baseline-tests.txt` is missing, re-run `cargo test`.
 
-Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Catalog."
+Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Refactor-Investigate."
 
 ---
 
-## Step 2 — Invoke Phase 1: Catalog
+## Step 2 — Invoke Phase 1: Refactor-Investigate
 
-Skip if `RESUME_FROM` is `blueprint`, `execute`, or `task-<id>`.
+Skip if `RESUME_FROM` is `Refactor-Plan`, `Refactor-Execute`, or `task-<id>`.
 
 ```text
 Skill("refactor-investigate", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>")
@@ -152,18 +152,18 @@ Wait for Phase Handoff. Append to phase log.
 
 **Post Phase 1 progress report. User check-in.**
 
-Incorporate user adjustments as an amendment note appended to the Catalog
-handoff before passing to Blueprint.
+Incorporate user adjustments as an amendment note appended to the Refactor-Investigate
+handoff before passing to Refactor-Plan.
 
 ---
 
-## Step 3 — Invoke Phase 2: Blueprint
+## Step 3 — Invoke Phase 2: Refactor-Plan
 
 Skip if `RESUME_FROM` is `execute` or `task-<id>`. When resuming at
-`blueprint`, load the Catalog handoff from `.claude/workflow/<slug>/smell-catalog.md`.
+`Refactor-Plan`, load the Refactor-Investigate handoff from `.claude/workflow/<slug>/smell-catalog.md`.
 
 ```text
-Skill("refactor-plan", "<catalog handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
+Skill("refactor-plan", "<Refactor-Investigate handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -175,14 +175,14 @@ Wait for direction before continuing.
 
 ---
 
-## Step 4 — Invoke Phase 3: Execute
+## Step 4 — Invoke Phase 3: Refactor-Execute
 
-When resuming at `execute` or `task-<id>`, load the Blueprint handoff from
+When resuming at `refactor-execute` or `task-<id>`, load the Refactor-Plan handoff from
 `.claude/workflow/<slug>/task-list.md`. Append `RESUME_FROM: task-<id>` to
 the arguments if resuming mid-execution.
 
 ```text
-Skill("refactor-execute", "<blueprint handoff content>")
+Skill("refactor-execute", "<Refactor-Plan handoff content>")
 ```
 
 Wait for Phase Handoff. Append to phase log.

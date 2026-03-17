@@ -5,10 +5,10 @@ argument-hint: "<scope> [BOUNDARIES: <do-not-touch list>] [BRANCH: refactor/<slu
 context: fork
 ---
 
-# Phase 1 — Catalog
+# Phase 1 — Refactor-Investigate
 
 You are the **Phase 1 coordinator**. Your job is to produce a complete,
-Contrarian-validated smell catalog that Blueprint can turn into a task list.
+Contrarian-validated smell catalog that Refactor-Plan can turn into a task list.
 
 Input: **$ARGUMENTS**
 
@@ -24,7 +24,7 @@ Extract from the input:
 Try team-based coordination first:
 
 ```text
-TeamCreate({ name: "catalog-team", agents: ["investigator", "contrarian"] })
+TeamCreate({ name: "refactor-investigate-team", agents: ["investigator", "contrarian"] })
 SendMessage({ to: "investigator", message: "<task + context>" })
 ```
 
@@ -145,14 +145,14 @@ Produce a **Phase Handoff**:
 
 ```text
 === PHASE HANDOFF ===
-Phase:     Catalog
+Phase:     Refactor-Investigate
 Status:    complete  (or: complete — no smells found | blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch or tbd>
 Artifacts: .claude/workflow/<slug>/smell-catalog.md
 Decisions:
   - <Contrarian reclassifications and exclusions with rationale>
-For next:  <what Blueprint needs: smell count per severity, notable
+For next:  <what Refactor-Plan needs: smell count per severity, notable
             interdependencies, boundary-adjacent smells that need extra care>
 Open:      <user questions, or "none">
 === END HANDOFF ===

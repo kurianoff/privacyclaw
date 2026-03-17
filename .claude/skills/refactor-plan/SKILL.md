@@ -1,7 +1,7 @@
 ---
 name: refactor-plan
 description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware refactoring task list. Contrarian challenges the plan for behavior risk, task granularity, sequencing, and boundary safety. Saves the finalized task list to task-list.md. Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
-argument-hint: "<catalog phase handoff> [USER_EXCLUSIONS: <additional exclusions>]"
+argument-hint: "<refactor-investigate phase handoff> [USER_EXCLUSIONS: <additional exclusions>]"
 context: fork
 ---
 
@@ -14,12 +14,12 @@ run without ambiguity.
 Input: **$ARGUMENTS**
 
 Extract from the input:
-- `scope`: the code area to refactor (from Catalog handoff)
-- `boundaries`: do-not-touch zones (from Catalog handoff)
-- `branch`: the refactor branch (from Catalog handoff)
+- `scope`: the code area to refactor (from Refactor-Investigate handoff)
+- `boundaries`: do-not-touch zones (from Refactor-Investigate handoff)
+- `branch`: the refactor branch (from Refactor-Investigate handoff)
 - `smell_catalog`: path to the smell catalog artifact
-- `for_next`: context from Catalog (smell counts, interdependencies, risks)
-- `user_exclusions`: any additional smells the user excluded at the Catalog gate
+- `for_next`: context from Refactor-Investigate (smell counts, interdependencies, risks)
+- `user_exclusions`: any additional smells the user excluded at the Refactor-Investigate gate
 
 ---
 
@@ -28,7 +28,7 @@ Extract from the input:
 Try team-based coordination first:
 
 ```text
-TeamCreate({ name: "blueprint-team", agents: ["architect", "contrarian"] })
+TeamCreate({ name: "refactor-plan-team", agents: ["architect", "contrarian"] })
 SendMessage({ to: "architect", message: "<task + context>" })
 ```
 
@@ -151,7 +151,7 @@ Produce a **Phase Handoff**:
 
 ```text
 === PHASE HANDOFF ===
-Phase:     Blueprint
+Phase:     Refactor-Plan
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
