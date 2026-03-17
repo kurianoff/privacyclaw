@@ -1,5 +1,4 @@
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use sha1::{Digest, Sha1};
 use std::collections::HashMap;
@@ -119,10 +118,8 @@ pub struct PiiVault {
     pub(crate) max_synthetic_key_len: usize,
     /// Seeded RNG state (we store the seed; callers advance it by passing &mut SmallRng).
     pub(crate) rng_seed: u64,
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     conversation_id: String,
-    #[allow(dead_code)]
-    created_at: DateTime<Utc>,
 }
 
 impl PiiVault {
@@ -143,7 +140,6 @@ impl PiiVault {
             max_synthetic_key_len: 0,
             rng_seed: seed,
             conversation_id: conversation_id.to_string(),
-            created_at: Utc::now(),
         }
     }
 
@@ -160,7 +156,6 @@ impl PiiVault {
             max_synthetic_key_len: 0,
             rng_seed,
             conversation_id: conversation_id.to_string(),
-            created_at: Utc::now(),
         };
         for r in records {
             v.insert_mapping_raw(r.original, r.synthetic, r.pii_type.label().to_string(), r.tier, r.confidence);
@@ -233,7 +228,7 @@ impl PiiVault {
     /// T3 standalone path the SLM sidecar already returns rewritten text, so this
     /// method is not called there — the vault is populated via `add_mapping` for the
     /// inbound reverse pass only.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn replace_originals(&self, text: &str) -> String {
         if self.original_to_synthetic.is_empty() {
             return text.to_string();
@@ -286,7 +281,7 @@ impl PiiVault {
     }
 
     /// Snapshot the current vault state for persistence.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn to_records(&self) -> Vec<VaultRecord> {
         self.synthetic_keys
             .iter()
@@ -316,7 +311,7 @@ impl PiiVault {
     }
 
     /// Iterator over (original, synthetic, pii_type_label) triples.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn triples(&self) -> impl Iterator<Item = (&str, &str, &str)> {
         self.original_values
             .iter()
@@ -341,7 +336,7 @@ impl PiiVault {
     }
 
     /// Iterator over (original, synthetic) string pairs.
-    #[allow(dead_code)]
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn pairs(&self) -> impl Iterator<Item = (&str, &str)> {
         self.original_values
             .iter()
@@ -383,7 +378,7 @@ impl VaultRegistry {
     }
 
     /// Get existing vault or create a new empty one.
-    #[allow(dead_code)] // called from #[cfg(test)] only
+    #[cfg_attr(not(test), allow(dead_code))]
     pub fn get_or_create(&self, conv_id: &str) -> VaultHandle {
         let mut map = self.vaults.lock().unwrap();
         if let Some(entry) = map.get_mut(conv_id) {
