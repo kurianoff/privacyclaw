@@ -756,6 +756,7 @@ fn pump_run_loop(secs: f64) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send_id, msg_send};
 
+    tracing::debug!(timeout_secs = secs, "pump_run_loop: entering ObjC2 run-loop drain");
     unsafe {
         // NSEventMaskAny = u64::MAX
         let app: Retained<AnyObject> =
@@ -768,6 +769,7 @@ fn pump_run_loop(secs: f64) {
                 c"kCFRunLoopDefaultMode".as_ptr()];
 
         // Drain all pending events up to `secs` timeout.
+        let mut dispatched: u32 = 0;
         loop {
             let event: Option<Retained<AnyObject>> = msg_send_id![
                 &*app,
@@ -777,10 +779,15 @@ fn pump_run_loop(secs: f64) {
                 dequeue: true
             ];
             match event {
-                Some(ev) => { let _: () = msg_send![&*app, sendEvent: &*ev]; }
+                Some(ev) => {
+                    tracing::debug!(dispatched, "pump_run_loop: dispatching NSEvent via sendEvent:");
+                    let _: () = msg_send![&*app, sendEvent: &*ev];
+                    dispatched += 1;
+                }
                 None => break,
             }
         }
+        tracing::debug!(dispatched, "pump_run_loop: run-loop drain complete");
     }
 }
 
