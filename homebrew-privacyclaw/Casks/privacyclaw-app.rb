@@ -1,5 +1,5 @@
 cask "privacyclaw-app" do
-  version "0.2.0"
+  version "0.2.2"
 
   # DMG URL — update when a GitHub Release is published.
   on_arm do

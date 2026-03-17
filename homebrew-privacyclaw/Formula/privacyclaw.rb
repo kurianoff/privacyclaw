@@ -1,14 +1,14 @@
 class Privacyclaw < Formula
   desc "Privacy proxy for LLM API traffic — inspect and redact sensitive data"
   homepage "https://github.com/kurianoff/kladovka"
-  version "0.2.1"
+  version "0.2.2"
 
   # Binary tarball URL — update when a GitHub Release is published.
   # See: https://github.com/kurianoff/kladovka/releases
   on_macos do
     if Hardware::CPU.arm?
-      url "file:///tmp/privacyclaw-0.2.1-aarch64-apple-darwin.tar.gz"
-      sha256 "2551d978548c79be43276d869606e8b7e5888a631156c1216cdf7d74eeae8801"
+      url "file:///tmp/privacyclaw-0.2.2-aarch64-apple-darwin.tar.gz"
+      sha256 "59714d4ef2da97566982b4128deaced2ea271c10da4dbcd8941a3fda1bd572f5"
     else
       url "https://github.com/kurianoff/kladovka/releases/download/v#{version}/privacyclaw-#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "3e60e292388ac91fb9e0c197fe40d20c4c7c5d88371a69f3b2f2218681e915cd"
