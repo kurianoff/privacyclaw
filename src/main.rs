@@ -386,6 +386,7 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         proxy_running:    false, // tray::run() calls start_proxy() on entry
         http_listener_on: false,
         http_task:        None,
+        net_task:         None,
         cert_cache,
         cfg,
         cfg_mgr,

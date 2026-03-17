@@ -28,6 +28,8 @@ pub(crate) struct TrayState {
     pub http_listener_on: bool,
     /// Handle to the HTTP CONNECT listener task; `None` when not running.
     pub http_task: Option<tokio::task::JoinHandle<()>>,
+    /// Handle to the network proxy (MITM) listener task; `None` when not running.
+    pub net_task: Option<tokio::task::JoinHandle<()>>,
     /// TLS certificate cache shared with the proxy tasks.
     pub cert_cache: crate::ca::cert_gen::CertCache,
     /// Resolved application config.
@@ -851,7 +853,7 @@ fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
 
 // ── Proxy lifecycle helpers ───────────────────────────────────────────────────
 
-/// Spawn the HTTP CONNECT listener task and record it in `state`.
+/// Spawn the HTTP CONNECT and network proxy listener tasks and record them in `state`.
 ///
 /// Sets `state.proxy_running = true` and `state.http_listener_on = true`.
 fn start_proxy(state: &mut TrayState) {
@@ -862,24 +864,43 @@ fn start_proxy(state: &mut TrayState) {
         state.ws_tx.clone(),
         state.pii.clone(),
     );
-    let handle = state.rt.spawn(async move {
+    let http_handle = state.rt.spawn(async move {
         if let Err(e) = crate::proxy::run(c, cc, s, w, p).await {
             tracing::error!(err = %e, "CONNECT proxy task exited with error");
         }
     });
-    state.http_task = Some(handle);
+    state.http_task = Some(http_handle);
+
+    let (c2, cc2, s2, w2, p2) = (
+        state.cfg.clone(),
+        state.cert_cache.clone(),
+        state.store.clone(),
+        state.ws_tx.clone(),
+        state.pii.clone(),
+    );
+    let net_handle = state.rt.spawn(async move {
+        if let Err(e) = crate::proxy::network::run(c2, cc2, s2, w2, p2).await {
+            tracing::error!(err = %e, "network proxy task exited with error");
+        }
+    });
+    state.net_task = Some(net_handle);
+
     state.proxy_running = true;
     state.http_listener_on = true;
     tracing::warn!("proxy started");
 }
 
-/// Abort the HTTP CONNECT listener task and disable network routing if active.
+/// Abort the HTTP CONNECT and network proxy listener tasks and disable network routing.
 ///
-/// Sets `state.proxy_running = false` and `state.http_task = None`.
+/// Sets `state.proxy_running = false`, `state.http_task = None`, `state.net_task = None`.
 fn stop_proxy(state: &mut TrayState) {
     if let Some(handle) = state.http_task.take() {
         handle.abort();
         tracing::warn!("CONNECT proxy task aborted");
+    }
+    if let Some(handle) = state.net_task.take() {
+        handle.abort();
+        tracing::warn!("network proxy task aborted");
     }
     state.http_listener_on = false;
     // Disable network routing in the background if it was active.

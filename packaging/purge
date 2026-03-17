@@ -121,11 +121,13 @@ fi
 # ── 7. Clean /etc/pf.conf ─────────────────────────────────────────────────────
 step "7. /etc/pf.conf"
 if grep -q 'privacyclaw' /etc/pf.conf 2>/dev/null; then
-    grep -v 'privacyclaw' /etc/pf.conf > /tmp/pf.conf.purge \
-        && mv /tmp/pf.conf.purge /etc/pf.conf \
-        && pfctl -ef /etc/pf.conf 2>/dev/null \
-        && ok "pf.conf cleaned and reloaded" \
-        || fail "failed to clean /etc/pf.conf"
+    if grep -v 'privacyclaw' /etc/pf.conf > /tmp/pf.conf.purge \
+        && mv /tmp/pf.conf.purge /etc/pf.conf; then
+        pfctl -ef /etc/pf.conf 2>/dev/null || true   # reload is best-effort
+        ok "pf.conf cleaned and reloaded"
+    else
+        fail "failed to clean /etc/pf.conf"
+    fi
 else
     warn "no privacyclaw entries in /etc/pf.conf"
 fi
