@@ -3,6 +3,28 @@ use tokio::io::{AsyncWrite, AsyncWriteExt};
 
 use super::UPSTREAM_WRITE_TIMEOUT;
 
+// ─── Per-request HTTP framing state ──────────────────────────────────────────
+
+/// Per-request mutable state shared between the two `handle_c2u_*` variants.
+///
+/// Both `handle_c2u_passthrough` and `handle_c2u_pii` track the same set of
+/// framing fields; this struct groups them so that each per-request reset is a
+/// single `state = HttpFramingState::default()` rather than five separate
+/// assignments.
+#[derive(Default)]
+pub(super) struct HttpFramingState {
+    pub(super) header_done: bool,
+    pub(super) content_length: Option<usize>,
+    pub(super) is_chunked: bool,
+    pub(super) body_start: usize,
+    /// Bytes of `raw` already written to upstream.
+    /// For chunked requests stays at 0 until the complete body is available;
+    /// for all other framing bytes are forwarded eagerly.
+    pub(super) forwarded: usize,
+    /// Body bytes received so far (PII path only; ignored in passthrough).
+    pub(super) body_received: usize,
+}
+
 // ─── HTTP request framing helpers ─────────────────────────────────────────────
 
 pub(super) fn find_header_end(data: &[u8]) -> Option<usize> {

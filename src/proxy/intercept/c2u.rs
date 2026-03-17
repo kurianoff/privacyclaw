@@ -14,6 +14,7 @@ use super::READ_BUF;
 use super::framing::{
     decode_chunked_body, find_chunked_body_end, find_header_end, is_chunked_encoding,
     parse_content_length, rebuild_request_with_content_length, upstream_write,
+    HttpFramingState,
 };
 
 // ─── Client → Upstream ───────────────────────────────────────────────────────
@@ -69,23 +70,16 @@ async fn handle_c2u_passthrough(
 ) -> Result<()> {
     let mut buf = vec![0u8; READ_BUF];
     let mut raw: Vec<u8> = Vec::new();
-    let mut header_done = false;
-    let mut content_length: Option<usize> = None;
-    let mut is_chunked = false;
-    let mut body_start: usize = 0;
-    // Bytes of `raw` already written to upstream. For chunked requests this
-    // stays at 0 until the complete body is available; for all other framing
-    // bytes are forwarded eagerly.
-    let mut forwarded: usize = 0;
+    let mut state = HttpFramingState::default();
 
     loop {
         // Only read from the network when we actually need more bytes.
-        let needs_more = if !header_done {
+        let needs_more = if !state.header_done {
             find_header_end(&raw).is_none()
-        } else if let Some(cl) = content_length {
-            raw.len() < body_start + cl
-        } else if is_chunked {
-            find_chunked_body_end(&raw[body_start..]).is_none()
+        } else if let Some(cl) = state.content_length {
+            raw.len() < state.body_start + cl
+        } else if state.is_chunked {
+            find_chunked_body_end(&raw[state.body_start..]).is_none()
         } else {
             // Unknown body framing — keep reading until EOF.
             true
@@ -94,7 +88,7 @@ async fn handle_c2u_passthrough(
         if needs_more {
             // Between requests (raw is empty, no partial state): also watch for
             // upstream dying so we don't block indefinitely on reader.read().
-            let n = if raw.is_empty() && !header_done {
+            let n = if raw.is_empty() && !state.header_done {
                 tokio::select! {
                     result = reader.read(&mut buf) => result?,
                     _ = &mut upstream_shutdown_rx => {
@@ -114,26 +108,26 @@ async fn handle_c2u_passthrough(
         }
 
         // Locate header end if not yet found.
-        if !header_done {
+        if !state.header_done {
             if let Some(hdr_end) = find_header_end(&raw) {
-                header_done = true;
-                body_start = hdr_end;
-                content_length = parse_content_length(&raw[..hdr_end]);
-                is_chunked = content_length.is_none() && is_chunked_encoding(&raw[..hdr_end]);
+                state.header_done = true;
+                state.body_start = hdr_end;
+                state.content_length = parse_content_length(&raw[..hdr_end]);
+                state.is_chunked = state.content_length.is_none() && is_chunked_encoding(&raw[..hdr_end]);
                 tracing::debug!(
-                    content_length = ?content_length,
-                    is_chunked,
+                    content_length = ?state.content_length,
+                    is_chunked = state.is_chunked,
                     "c2u: request headers parsed"
                 );
-                if !is_chunked {
+                if !state.is_chunked {
                     // Non-chunked: forward the bytes we have so far (headers + any
                     // body bytes that arrived in the same read as the headers).
                     if upstream_gone.load(Ordering::Acquire) {
                         tracing::warn!("c2u: upstream closed before request could be forwarded, aborting");
                         anyhow::bail!("upstream connection closed by server");
                     }
-                    upstream_write(&mut writer, &raw[forwarded..]).await?;
-                    forwarded = raw.len();
+                    upstream_write(&mut writer, &raw[state.forwarded..]).await?;
+                    state.forwarded = raw.len();
                 }
                 // Chunked: keep buffering — don't forward until body is complete.
             } else {
@@ -142,30 +136,26 @@ async fn handle_c2u_passthrough(
         }
 
         // Eagerly forward new bytes for non-chunked / unknown-framing requests.
-        if !is_chunked && forwarded < raw.len() {
+        if !state.is_chunked && state.forwarded < raw.len() {
             if upstream_gone.load(Ordering::Acquire) {
                 tracing::warn!("c2u: upstream closed before request could be forwarded, aborting");
                 anyhow::bail!("upstream connection closed by server");
             }
-            upstream_write(&mut writer, &raw[forwarded..]).await?;
-            forwarded = raw.len();
+            upstream_write(&mut writer, &raw[state.forwarded..]).await?;
+            state.forwarded = raw.len();
         }
 
         // Check whether the complete body is available.
-        if let Some(cl) = content_length {
-            if raw.len() >= body_start + cl {
-                let body = raw[body_start..body_start + cl].to_vec();
+        if let Some(cl) = state.content_length {
+            if raw.len() >= state.body_start + cl {
+                let body = raw[state.body_start..state.body_start + cl].to_vec();
                 log_request(&body, provider, &host, &store, &ws_tx, &shared_conv_id).await;
-                raw.drain(..body_start + cl);
-                forwarded = 0;
-                header_done = false;
-                content_length = None;
-                is_chunked = false;
-                body_start = 0;
+                raw.drain(..state.body_start + cl);
+                state = HttpFramingState::default();
             }
-        } else if is_chunked {
-            if let Some(end) = find_chunked_body_end(&raw[body_start..]) {
-                let chunked_slice = &raw[body_start..body_start + end];
+        } else if state.is_chunked {
+            if let Some(end) = find_chunked_body_end(&raw[state.body_start..]) {
+                let chunked_slice = &raw[state.body_start..state.body_start + end];
                 if upstream_gone.load(Ordering::Acquire) {
                     tracing::warn!("c2u: upstream closed before request could be forwarded, aborting");
                     anyhow::bail!("upstream connection closed by server");
@@ -173,21 +163,17 @@ async fn handle_c2u_passthrough(
                 if let Some(decoded) = decode_chunked_body(chunked_slice) {
                     // Re-encode with Content-Length so the upstream knows the body
                     // is complete without needing an EOF / connection close.
-                    let rebuilt = rebuild_request_with_content_length(&raw[..body_start], &decoded);
+                    let rebuilt = rebuild_request_with_content_length(&raw[..state.body_start], &decoded);
                     upstream_write(&mut writer, &rebuilt).await?;
                     log_request(&decoded, provider, &host, &store, &ws_tx, &shared_conv_id).await;
                     tracing::debug!(decoded_bytes = decoded.len(), "c2u: chunked → Content-Length, state reset");
                 } else {
                     // Decode failed: forward the raw chunked bytes as a fallback.
                     tracing::warn!("c2u: chunked decode failed, forwarding raw");
-                    upstream_write(&mut writer, &raw[..body_start + end]).await?;
+                    upstream_write(&mut writer, &raw[..state.body_start + end]).await?;
                 }
-                raw.drain(..body_start + end);
-                forwarded = 0;
-                header_done = false;
-                content_length = None;
-                is_chunked = false;
-                body_start = 0;
+                raw.drain(..state.body_start + end);
+                state = HttpFramingState::default();
             }
             // Else: keep buffering.
         }
@@ -195,8 +181,8 @@ async fn handle_c2u_passthrough(
     }
 
     // EOF reached: handle any remaining buffered data.
-    if header_done && content_length.is_none() && !is_chunked {
-        let body = &raw[body_start..];
+    if state.header_done && state.content_length.is_none() && !state.is_chunked {
+        let body = &raw[state.body_start..];
         if !body.is_empty() {
             log_request(body, provider, &host, &store, &ws_tx, &shared_conv_id).await;
         }
@@ -223,14 +209,10 @@ async fn handle_c2u_pii(
 ) -> Result<()> {
     let mut buf = vec![0u8; READ_BUF];
     let mut raw: Vec<u8> = Vec::new();
-    let mut header_done = false;
-    let mut content_length: Option<usize> = None;
-    let mut is_chunked = false;
-    let mut body_start: usize = 0;
-    let mut body_received: usize = 0;
+    let mut state = HttpFramingState::default();
 
     loop {
-        let n = if raw.is_empty() && !header_done {
+        let n = if raw.is_empty() && !state.header_done {
             tokio::select! {
                 result = reader.read(&mut buf) => {
                     result?
@@ -247,24 +229,24 @@ async fn handle_c2u_pii(
         if n == 0 { break; }
         raw.extend_from_slice(&buf[..n]);
 
-        if !header_done {
+        if !state.header_done {
             if let Some(hdr_end) = find_header_end(&raw) {
-                header_done = true;
-                body_start = hdr_end;
-                content_length = parse_content_length(&raw[..hdr_end]);
-                is_chunked = content_length.is_none() && is_chunked_encoding(&raw[..hdr_end]);
-                body_received = raw.len() - body_start;
-                tracing::debug!(content_length = ?content_length, is_chunked, "c2u_pii: request headers parsed");
+                state.header_done = true;
+                state.body_start = hdr_end;
+                state.content_length = parse_content_length(&raw[..hdr_end]);
+                state.is_chunked = state.content_length.is_none() && is_chunked_encoding(&raw[..hdr_end]);
+                state.body_received = raw.len() - state.body_start;
+                tracing::debug!(content_length = ?state.content_length, is_chunked = state.is_chunked, "c2u_pii: request headers parsed");
             }
         } else {
-            body_received += buf[..n].len();
+            state.body_received += buf[..n].len();
         }
 
-        let body_done = header_done && if let Some(cl) = content_length {
-            body_received >= cl
-        } else if is_chunked {
-            let found = find_chunked_body_end(&raw[body_start..]).is_some();
-            tracing::debug!(found, raw_body_len = raw.len() - body_start, "c2u_pii: chunked body end check");
+        let body_done = state.header_done && if let Some(cl) = state.content_length {
+            state.body_received >= cl
+        } else if state.is_chunked {
+            let found = find_chunked_body_end(&raw[state.body_start..]).is_some();
+            tracing::debug!(found, raw_body_len = raw.len() - state.body_start, "c2u_pii: chunked body end check");
             found
         } else {
             // RFC 7230 §3.3: no Content-Length and no Transfer-Encoding → no body.
@@ -274,14 +256,14 @@ async fn handle_c2u_pii(
         if !body_done { continue; }
 
         // Extract the decoded body.
-        let (original_body, consumed) = if is_chunked {
-            let end = find_chunked_body_end(&raw[body_start..]).unwrap();
-            let decoded = decode_chunked_body(&raw[body_start..body_start + end])
-                .unwrap_or_else(|| raw[body_start..body_start + end].to_vec());
-            (decoded, body_start + end)
+        let (original_body, consumed) = if state.is_chunked {
+            let end = find_chunked_body_end(&raw[state.body_start..]).unwrap();
+            let decoded = decode_chunked_body(&raw[state.body_start..state.body_start + end])
+                .unwrap_or_else(|| raw[state.body_start..state.body_start + end].to_vec());
+            (decoded, state.body_start + end)
         } else {
-            let cl = content_length.unwrap_or(body_received);
-            (raw[body_start..body_start + cl].to_vec(), body_start + cl)
+            let cl = state.content_length.unwrap_or(state.body_received);
+            (raw[state.body_start..state.body_start + cl].to_vec(), state.body_start + cl)
         };
 
         // Phase A: create or find conversation before running pipeline.
@@ -357,7 +339,7 @@ async fn handle_c2u_pii(
             working_body
         };
 
-        let forward_request = rebuild_request_with_content_length(&raw[..body_start], &forward_body);
+        let forward_request = rebuild_request_with_content_length(&raw[..state.body_start], &forward_body);
 
         // Phase B: store request messages with masked content.
         let pii_mode_active = pii.as_ref().map(|p| p.mode == PiiMode::Replace).unwrap_or(false);
@@ -438,11 +420,7 @@ async fn handle_c2u_pii(
 
         // Drain the consumed request bytes; keep any leftover (next request on keep-alive).
         raw.drain(..consumed.min(raw.len()));
-        header_done = false;
-        content_length = None;
-        is_chunked = false;
-        body_start = 0;
-        body_received = 0;
+        state = HttpFramingState::default();
     }
 
     Ok(())
