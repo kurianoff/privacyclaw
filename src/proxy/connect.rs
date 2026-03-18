@@ -6,9 +6,11 @@ use anyhow::{Context, Result};
 use rustls::ClientConfig;
 use rustls::pki_types::ServerName;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
+use tokio::time::timeout;
 use tokio_rustls::TlsConnector;
 
 pub async fn handle(
@@ -23,16 +25,29 @@ pub async fn handle(
     tracing::debug!("connect: reading CONNECT request line");
     let mut buf_reader = BufReader::new(stream);
 
-    // Read the CONNECT request line
+    // Read the CONNECT request line — 30 s timeout guards against clients that
+    // open a TCP socket but never send a CONNECT line (e.g. stale pre-sleep sockets).
     let mut connect_line = String::new();
-    buf_reader.read_line(&mut connect_line).await?;
+    match timeout(Duration::from_secs(30), buf_reader.read_line(&mut connect_line)).await {
+        Ok(result) => { result?; }
+        Err(_) => {
+            tracing::warn!("connect: request-line read timeout, dropping connection");
+            return Ok(());
+        }
+    }
     let connect_line = connect_line.trim();
     tracing::debug!(line = %connect_line, "connect: CONNECT request line received");
 
-    // Drain remaining headers
+    // Drain remaining headers — same 30 s timeout per line.
     loop {
         let mut line = String::new();
-        buf_reader.read_line(&mut line).await?;
+        match timeout(Duration::from_secs(30), buf_reader.read_line(&mut line)).await {
+            Ok(result) => { result?; }
+            Err(_) => {
+                tracing::warn!("connect: header drain read timeout, dropping connection");
+                return Ok(());
+            }
+        }
         tracing::debug!(line = %line.trim(), "connect: drained header line");
         if line == "\r\n" || line == "\n" || line.is_empty() {
             break;
