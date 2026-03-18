@@ -1,6 +1,6 @@
 ---
 name: refactor-plan
-description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware task list. Contrarian challenges for behavior risk, granularity, sequencing, and boundary safety. Saves the plan as an OpenSpec change (proposal.md + tasks.md). Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
+description: Phase 2 of the refactor workflow. Architect turns the validated smell catalog into an ordered, dependency-aware task list. Contrarian challenges for behavior risk, granularity, sequencing, and boundary safety. PM completes the OpenSpec change (proposal.md + tasks.md + spec deltas) and runs openspec validate --strict. Can be invoked standalone by passing a Refactor-Investigate Phase Handoff as the argument.
 argument-hint: "<refactor-investigate phase handoff> [USER_EXCLUSIONS: <additional exclusions>]"
 context: fork
 ---
@@ -28,7 +28,7 @@ Extract from the input:
 Try team-based coordination first:
 
 ```text
-TeamCreate({ name: "refactor-plan-team", agents: ["architect", "contrarian"] })
+TeamCreate({ name: "refactor-plan-team", agents: ["architect", "contrarian", "pm"] })
 SendMessage({ to: "architect", message: "<task + context>" })
 ```
 
@@ -111,50 +111,42 @@ Pass the Contrarian handoff back to **architect**. Task:
 response, surface them to the orchestrator in the `Open` field of the Phase
 Handoff — the orchestrator will ask the user for direction.
 
-### Step 3 — Create OpenSpec change
+### Step 3 — Complete OpenSpec change via PM
 
-Create `openspec/changes/refactor-<slug>/`.
+Invoke **pm** with the finalized task list from the Architect/Contrarian cycle. Task:
 
-**`proposal.md`**:
+> Using the validated task list, complete the OpenSpec change `refactor-<slug>`:
+> 1. Update `openspec/changes/refactor-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
+> 2. Create `openspec/changes/refactor-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
+>    ```markdown
+>    # Tasks: Refactor <scope>
+>    Run `cargo test && cargo clippy -- -D warnings` after every merged task.
+>    ---
+>    ## T<id>: <title>
+>    Smells: <smell IDs>
+>    Files: `<file>:<line range>`
+>    Depends on: <task IDs or none>
+>    Parallel-safe: yes | no — <reason if no>
+>    Changes: <what to do>
+>    Criterion: <verification test>
+>    - [ ] T<id> complete
+>    ---
+>    ```
+> 3. Run `openspec list --specs` to identify capabilities whose files are touched.
+>    For each affected capability, create `openspec/changes/refactor-<slug>/specs/<capability>/spec.md`
+>    with a minimal MODIFIED delta:
+>    ```markdown
+>    ## MODIFIED Requirements
+>    ### Requirement: <existing requirement name>
+>    [Full requirement text unchanged — structural refactoring only, no behavior change]
+>    **Structural notes**: Internal implementation restructured for maintainability.
+>    #### Scenario: <existing scenario name>
+>    [All scenarios unchanged]
+>    ```
+> 4. Run `openspec validate refactor-<slug> --strict` and fix any issues before returning.
+> Produce an Agent Handoff with the change id, task count, and validate result.
 
-```markdown
-# Refactor: <scope>
-
-## Why
-Structural smells catalogued by Refactor-Investigate. No behavior change.
-
-## What Changes
-<bullet list of task titles>
-
-## Impact
-- Affected code: <all files across all tasks>
-- Boundaries (do not touch): <boundaries or none>
-```
-
-**`tasks.md`** — one section per task, in execution order:
-
-```markdown
-# Tasks: Refactor <scope>
-
-Run `cargo test && cargo clippy -- -D warnings` after every merged task.
-
----
-
-## T<id>: <title>
-
-Smells: <smell IDs>
-Files: `<file>:<line range>` (one per line)
-Depends on: <task IDs or none>
-Parallel-safe: yes | no — <reason if no>
-
-Changes: <what to do>
-
-Criterion: <verification test>
-
-- [ ] T<id> complete
-
----
-```
+**Phase completion requires `openspec validate refactor-<slug> --strict` to pass.** If it does not pass, surface the validation errors in the Phase Handoff `Open` field.
 
 **Task status convention** (updated by Refactor-Execute):
 - Done: `- [x] T<id> complete`
@@ -168,6 +160,7 @@ Criterion: <verification test>
 ```text
 SendMessage({ to: "architect",  message: {type: "shutdown_request"} })
 SendMessage({ to: "contrarian", message: {type: "shutdown_request"} })
+SendMessage({ to: "pm",         message: {type: "shutdown_request"} })
 TeamDelete()
 ```
 
@@ -183,10 +176,14 @@ Phase:     Refactor-Plan
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
-Artifacts: openspec/changes/refactor-<slug>/tasks.md
+OpenSpec:  refactor-<slug>
+Artifacts:
+  openspec/changes/refactor-<slug>/proposal.md
+  openspec/changes/refactor-<slug>/tasks.md
 Decisions:
   - <key task grouping and sequencing decisions>
   - <Contrarian challenges resolved or dismissed>
+  - openspec validate: clean
 For next:  <what Execute needs: total task count, which tasks are
             parallel-safe, any tasks that are particularly risky or
             boundary-adjacent and need extra Contrarian scrutiny>

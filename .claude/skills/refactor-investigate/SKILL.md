@@ -1,6 +1,6 @@
 ---
 name: refactor-investigate
-description: Phase 1 of the refactor workflow. Investigator catalogs structural smells in the target scope (over-long functions, mixed concerns, duplication, under-instrumented paths, dead code). Contrarian challenges the classifications — revising severities, adding missed smells, and flagging boundary risks. Saves the validated catalog to smell-catalog.md. Can be invoked standalone or as part of /refactor.
+description: Phase 1 of the refactor workflow. Investigator catalogs structural smells in the target scope (over-long functions, mixed concerns, duplication, under-instrumented paths, dead code). Contrarian challenges the classifications — revising severities, adding missed smells, and flagging boundary risks. Saves the validated catalog to smell-catalog.md and scaffolds an OpenSpec change. Can be invoked standalone or as part of /refactor.
 argument-hint: "<scope> [BOUNDARIES: <do-not-touch list>] [BRANCH: refactor/<slug>]"
 context: fork
 ---
@@ -129,6 +129,32 @@ Branch: <branch>
 
 ---
 
+### Step 4 — Scaffold OpenSpec change
+
+Run `openspec list` to confirm no existing change conflicts with `refactor-<slug>`.
+
+Create `openspec/changes/refactor-<slug>/proposal.md`:
+
+```markdown
+# Refactor: <scope>
+
+## Why
+Structural smells found by automated investigation. No behavior change.
+
+## What Changes
+- Task list TBD — produced by Refactor-Plan from smell catalog below
+- <bullet list of smell titles and file locations>
+
+## Impact
+- Affected code: <all files referenced in smell catalog>
+- Boundaries (do not touch): <boundaries or none>
+```
+
+This proposal will be completed by Refactor-Plan, which adds `tasks.md` and spec deltas.
+Note: `openspec validate` is not run here — the change is incomplete until Refactor-Plan finishes it.
+
+---
+
 ## Team cleanup
 
 ```text
@@ -149,11 +175,15 @@ Phase:     Refactor-Investigate
 Status:    complete  (or: complete — no smells found | blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch or tbd>
-Artifacts: .claude/workflow/<slug>/smell-catalog.md
+OpenSpec:  refactor-<slug>
+Artifacts:
+  .claude/workflow/<slug>/smell-catalog.md
+  openspec/changes/refactor-<slug>/proposal.md
 Decisions:
   - <Contrarian reclassifications and exclusions with rationale>
 For next:  <what Refactor-Plan needs: smell count per severity, notable
-            interdependencies, boundary-adjacent smells that need extra care>
+            interdependencies, boundary-adjacent smells that need extra care.
+            OpenSpec change refactor-<slug> is scaffolded and ready for tasks.md.>
 Open:      <user questions, or "none">
 === END HANDOFF ===
 ```

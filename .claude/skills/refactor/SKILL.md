@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: Orchestrate the full refactoring workflow (Investigate → Plan → Execute). Investigator + Contrarian investigate structural smells, Architect + Contrarian plan a task list, then a per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) executes each one with a revert protocol. Standalone skill — not part of the implement flow.
+description: Orchestrate the full refactoring workflow (Investigate → Plan → Execute). Investigator + Contrarian investigate structural smells, Architect + Contrarian + PM plan and validate an OpenSpec change, then a per-task cycle (Refactoring Engineer → Simplifier → Logging Implementer → Test Runner → Contrarian) executes each one with a revert protocol. Standalone skill — not part of the implement flow.
 argument-hint: "<scope> [DO NOT TOUCH: <boundaries>] [RESUME_FROM: refactor-investigate|refactor-plan|refactor-execute|task-<id>] [SLUG: <existing-slug>]"
 context: fork
 ---
@@ -51,6 +51,7 @@ Phase:     <Refactor-Investigate | Refactor-Plan | Refactor-Execute>
 Status:    <complete | blocked — reason>
 Scope:     <scope>
 Branch:    refactor/<slug>
+OpenSpec:  refactor-<slug>
 Artifacts: <newline-separated file paths>
 Decisions: <bullet list of key decisions>
 For next:  <2–4 sentences for the next phase>
@@ -82,6 +83,8 @@ challenged and how Architect responded. Be concrete.>
 **Artifacts**
 <bullet list from handoff Artifacts, one-sentence description each>
 
+**OpenSpec change**: `refactor-<slug>`
+
 **What goes to Phase <N+1>**
 <verbatim "For next:" from the Phase Handoff>
 
@@ -97,6 +100,7 @@ challenged and how Architect responded. Be concrete.>
 
 > "Refactor-Investigate complete. Found <N> smells (high: <N>, medium: <N>, low: <N>).
 > Excluded by Contrarian: <list or none>.
+> OpenSpec change `refactor-<slug>` scaffolded at `openspec/changes/refactor-<slug>/`.
 > Proceed to Refactor-Plan? Or adjust scope?
 >
 > To resume here later: `/refactor SLUG: <slug> RESUME_FROM: Refactor-Plan`"
@@ -106,7 +110,8 @@ the handoff passed to Refactor-Plan.
 
 **After Phase 2 (Refactor-Plan):** pause and present the task plan. Ask:
 
-> "Refactor-Plan complete. <N> tasks planned across <N> files.
+> "Refactor-Plan complete. <N> tasks in `openspec/changes/refactor-<slug>/tasks.md`.
+> `openspec validate refactor-<slug> --strict`: clean.
 > Contrarian challenges resolved: <summary>.
 > Unresolved critical items (if any): <list>.
 > Proceed to Execute?
@@ -160,7 +165,8 @@ handoff before passing to Refactor-Plan.
 ## Step 3 — Invoke Phase 2: Refactor-Plan
 
 Skip if `RESUME_FROM` is `execute` or `task-<id>`. When resuming at
-`Refactor-Plan`, load the Refactor-Investigate handoff from `.claude/workflow/<slug>/smell-catalog.md`.
+`Refactor-Plan`, load the Refactor-Investigate handoff from `.claude/workflow/<slug>/smell-catalog.md`
+and the OpenSpec change-id from `openspec/changes/refactor-<slug>/`.
 
 ```text
 Skill("refactor-plan", "<Refactor-Investigate handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
@@ -178,8 +184,8 @@ Wait for direction before continuing.
 ## Step 4 — Invoke Phase 3: Refactor-Execute
 
 When resuming at `refactor-execute` or `task-<id>`, load the Refactor-Plan handoff from
-`openspec/changes/refactor-<slug>/tasks.md`. Append `RESUME_FROM: task-<id>` to
-the arguments if resuming mid-execution.
+`openspec/changes/refactor-<slug>/tasks.md` (the OpenSpec tasks file is the source of truth).
+Append `RESUME_FROM: task-<id>` to the arguments if resuming mid-execution.
 
 ```text
 Skill("refactor-execute", "<Refactor-Plan handoff content>")
@@ -195,6 +201,7 @@ Wait for Phase Handoff. Append to phase log.
 
 ```bash
 cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
+openspec validate refactor-<slug> --strict
 ```
 
 Report to the user:
@@ -218,8 +225,15 @@ Behavior guarantee:
   Baseline: <X tests passing>
   Final:    <X tests passing>
 
+OpenSpec change: refactor-<slug>
+  Tasks:    openspec/changes/refactor-<slug>/tasks.md
+  Validate: <clean | issues remaining>
+
 To merge:
   git checkout main && git merge --no-ff refactor/<slug>
+
+After merge:
+  openspec archive refactor-<slug> --yes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 

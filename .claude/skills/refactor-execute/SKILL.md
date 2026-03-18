@@ -1,6 +1,6 @@
 ---
 name: refactor-execute
-description: Phase 3 of the refactor workflow. Executes every task from the Refactor-Plan task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Can be invoked standalone by passing a Refactor-Plan Phase Handoff as the argument.
+description: Phase 3 of the refactor workflow. Executes every task from the Refactor-Plan task list using isolated worktrees. Per-task pipeline: Refactoring Engineer → Simplifier → Logging Implementer → Test Runner (behavior gate) → Contrarian (structure gate). Reverts tasks that fail after max iterations. Tracks completion in OpenSpec tasks.md. Can be invoked standalone by passing a Refactor-Plan Phase Handoff as the argument.
 argument-hint: "<refactor-plan phase handoff> [RESUME_FROM: task-<id>]"
 context: fork
 ---
@@ -17,7 +17,7 @@ Extract from the input:
 - `scope`: the code area being refactored (from Refactor-Plan handoff)
 - `boundaries`: do-not-touch zones (from Refactor-Plan handoff)
 - `branch`: the refactor branch (`refactor/<slug>`)
-- `slug`: derived from `branch` (strip `refactor/` prefix)
+- `openspec_id`: the OpenSpec change id (`refactor-<slug>`, from Refactor-Plan handoff `OpenSpec` field)
 - `tasks_path`: `openspec/changes/refactor-<slug>/tasks.md` (from Refactor-Plan handoff `Artifacts`)
 - `for_next`: context from Refactor-Plan (parallel-safe tasks, risky tasks)
 - `RESUME_FROM`: optional `task-<id>` — skip all tasks before this one
@@ -154,7 +154,7 @@ If reverted or blocked, replace the Test Runner / Contrarian lines with:
 
 ## Task scheduling
 
-Read `openspec/changes/refactor-<slug>/tasks.md`. Build a dependency graph
+Read `openspec/changes/<openspec_id>/tasks.md`. Build a dependency graph
 from the `Depends on:` and `Parallel-safe:` fields in each task section:
 
 - **Independent** tasks (`Parallel-safe: yes`, no overlapping files, no
@@ -178,8 +178,7 @@ For each task (parallel where scheduling allows):
 
 **Emit task-start progress report.** Append to refactor log. Create worktree.
 Pass to Refactoring Engineer: task `id`, `title`, `changes`, `criterion`,
-`files`, branch name, scope, and boundaries. Read all fields from
-`openspec/changes/refactor-<slug>/tasks.md`.
+`files`, branch name, scope, and boundaries. Read task fields from `<tasks_path>`.
 
 ### Step 2 — Refactoring Engineer
 
@@ -296,11 +295,15 @@ After all tasks are processed (before team cleanup):
 
 ```bash
 cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
+openspec validate <openspec_id> --strict
 ```
 
-Compare against baseline. If any previously-passing test now fails, surface
-to orchestrator with the diff. Do not produce a complete Phase Handoff until
-this is resolved or the user explicitly accepts the failure.
+Compare cargo test output against baseline. If any previously-passing test now
+fails, surface to orchestrator with the diff. Do not produce a complete Phase
+Handoff until this is resolved or the user explicitly accepts the failure.
+
+Confirm all tasks in `<tasks_path>` are marked `- [x]`. If any blocked or
+reverted tasks remain with `- [ ]`, the Phase Handoff `Open` field must list them.
 
 ---
 
@@ -320,14 +323,16 @@ Phase:     Refactor-Execute
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
+OpenSpec:  <openspec_id>
 Artifacts:
-  openspec/changes/refactor-<slug>/tasks.md
+  openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
   .claude/workflow/<slug>/refactor-log.md
   .claude/workflow/<slug>/baseline-tests.txt
   .claude/workflow/<slug>/final-tests.txt
 Decisions: <key implementation decisions per task>
 For next:  <what follow-on work needs: what changed structurally, what was
-            reverted or blocked, areas that may need further attention>
+            reverted or blocked, areas that may need further attention.
+            Run `openspec archive <openspec_id> --yes` after the branch is merged.>
 Open:
   - <blocked tasks with reason>
   - <reverted tasks with reason>
