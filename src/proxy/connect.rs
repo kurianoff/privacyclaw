@@ -84,10 +84,14 @@ async fn mitm(
 ) -> Result<()> {
     tracing::warn!(host = %host, port = port, "connect: MITM session starting");
 
-    // Connect to upstream first
-    let addr = format!("{}:{}", host, port);
+    // Resolve the real upstream IP, bypassing /etc/hosts (which may point to us
+    // when the network proxy is enabled), then connect using the IP directly.
+    tracing::debug!(host = %host, "connect: resolving upstream DNS (bypass /etc/hosts)");
+    let ip = super::network::resolve_bypass_hosts(host).await
+        .with_context(|| format!("DNS resolution failed for {}", host))?;
+    let addr = std::net::SocketAddr::new(ip, port);
     tracing::debug!(addr = %addr, "connect: connecting to upstream TCP");
-    let upstream_tcp = TcpStream::connect(&addr).await
+    let upstream_tcp = TcpStream::connect(addr).await
         .with_context(|| format!("Failed to connect upstream: {}", addr))?;
     tracing::info!(addr = %addr, "connect: upstream TCP connected");
 
