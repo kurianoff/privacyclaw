@@ -242,6 +242,32 @@ When surfacing security advisories in the Phase Handoff `Open` field:
 
 ---
 
+### Step 6 — Scaffold OpenSpec change
+
+Run `openspec list` to confirm no existing change conflicts with `modernize-<slug>`.
+
+Create `openspec/changes/modernize-<slug>/proposal.md`:
+
+```markdown
+# Modernize: <scope>
+
+## Why
+Outdated dependencies and toolchain identified by automated audit. No behavior change intended.
+
+## What Changes
+- Task list TBD — produced by Research from migration plan below
+- <bullet list of dep names with version gaps and tier classifications>
+
+## Impact
+- Affected code: <all files referenced in audit catalog>
+- Excluded/pinned: <excluded deps or none>
+```
+
+This proposal will be completed by Research, which adds `tasks.md` and spec deltas.
+Note: `openspec validate` is not run here — the change is incomplete until Research finishes it.
+
+---
+
 ## Team cleanup
 
 ```text
@@ -260,6 +286,7 @@ Phase 1 is complete when:
 - All direct dependencies are classified
 - Contrarian has reviewed and finalized tier assignments
 - Security advisories are identified (or confirmed absent)
+- `openspec/changes/modernize-<slug>/proposal.md` is scaffolded
 
 Produce a **Phase Handoff**:
 
@@ -269,12 +296,16 @@ Phase:     Audit
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch or tbd>
-Artifacts: .claude/workflow/<slug>/audit-catalog.md
+OpenSpec:  modernize-<slug>
+Artifacts:
+  .claude/workflow/<slug>/audit-catalog.md
+  openspec/changes/modernize-<slug>/proposal.md
 Decisions:
   - <Contrarian reclassifications with rationale>
   - <Confirmed unused deps>
 For next:  <what Research needs: count per tier, names of Tier 3 deps,
-            any conflict warnings, complexity flags from Investigator>
+            any conflict warnings, complexity flags from Investigator.
+            OpenSpec change modernize-<slug> is scaffolded and ready for tasks.md.>
 Open:
   - <critical security advisories: dep, advisory ID, CVSS — or "none">
 === END HANDOFF ===

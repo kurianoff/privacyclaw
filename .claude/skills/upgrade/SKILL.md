@@ -16,6 +16,7 @@ Input: **$ARGUMENTS**
 Extract from the input:
 - `scope`: the modernization scope
 - `branch`: the modernize branch (`modernize/<slug>`)
+- `openspec_id`: the OpenSpec change id (from Migrate handoff `OpenSpec` field)
 - `for_next`: context from Migrate (codebase health, known blockers)
 
 ---
@@ -56,6 +57,49 @@ Open:
 Pass forward:
   <2–3 sentences of critical context for the next agent>
 --- END HANDOFF ---
+```
+
+---
+
+## Live progress reports
+
+Emit progress announcements at key milestones — do NOT wait until the Phase
+Handoff to tell the user anything.
+
+**Upgrade starting** (emit at Step 3, after baseline passes):
+
+```
+─── Edition upgrade <current> → <target> starting
+    Branch: task/upgrade-<slug>-edition
+    cargo fix handles automatically: <summary>
+    Manual fixes expected: <summary>
+```
+
+**cargo fix complete** (emit at Step 4, after commit):
+
+```
+━━━ cargo fix complete
+    Files changed: <count>
+    Remaining errors: <count> — <brief list>
+    Remaining warnings: <count>
+```
+
+**Tests green** (emit at Step 9, after Test Runner returns green):
+
+```
+━━━ Tests green — submitting to Contrarian
+    cargo test: green
+    cargo clippy: clean
+```
+
+**Upgrade merged** (emit at Step 11, after merge):
+
+```
+━━━ Edition upgrade merged ✓
+    Edition: <current> → <target>
+    Files changed by cargo fix: <count>
+    Manual fixes: <count>
+    Contrarian: approved in <N> round(s)
 ```
 
 ---
@@ -330,6 +374,7 @@ Phase:     Upgrade
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
+OpenSpec:  <openspec_id>
 Artifacts:
   .claude/workflow/<slug>/upgrade-baseline.txt
   .claude/workflow/<slug>/post-fix-baseline.txt
@@ -341,6 +386,7 @@ Decisions:
   - MSRV adjusted: <yes — from X to Y | no>
 For next:  Modernize branch is ready for user review and merge to main.
            Edition: <target>. All tests green. All touched paths instrumented.
+           Run `openspec archive <openspec_id> --yes` after the branch is merged.
 Open:      <Contrarian challenges overridden by user, or "none">
 === END HANDOFF ===
 ```

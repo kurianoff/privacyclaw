@@ -28,7 +28,7 @@ Try team-based coordination first:
 
 ```text
 TeamCreate({ name: "research-team",
-             agents: ["general-purpose", "investigator", "architect", "contrarian"] })
+             agents: ["general-purpose", "investigator", "architect", "contrarian", "pm"] })
 SendMessage({ to: "general-purpose", message: "<task + context>" })
 ```
 
@@ -270,6 +270,54 @@ Migrate in dependency order.
 
 ---
 
+### Step 7 — Complete OpenSpec change via PM
+
+Invoke **pm** with the finalized migration plan. Task:
+
+> Using the validated migration plan, complete the OpenSpec change `modernize-<slug>`:
+> 1. Update `openspec/changes/modernize-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
+> 2. Create `openspec/changes/modernize-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
+>    ```markdown
+>    # Tasks: Modernize <scope>
+>    Run `cargo test && cargo clippy -- -D warnings` after every merged task.
+>    ---
+>    ## A: Batch A — Tier 1 Patch/Minor Updates
+>    Deps: <comma-separated dep list>
+>    Parallel-safe: yes
+>    Changes: Bump all Tier 1 dep versions in Cargo.toml at once; run cargo update
+>    Criterion: cargo test green, cargo clippy clean
+>    - [ ] A complete
+>    ---
+>    ## <task-id>: <dep> <current> → <target>
+>    Batch: B | C
+>    Files: `<file>:<line range>`
+>    Depends on: <task IDs or none>
+>    Parallel-safe: yes | no — <reason if no>
+>    Complexity: trivial | moderate | complex
+>    Migration guide: <URL or "none">
+>    Changes: <file:line old API → new API per entry>
+>    Criterion: <verification test>
+>    - [ ] <task-id> complete
+>    ---
+>    ```
+> 3. Run `openspec list --specs` to identify capabilities whose files are touched.
+>    For each affected capability, create `openspec/changes/modernize-<slug>/specs/<capability>/spec.md`
+>    with a minimal MODIFIED delta:
+>    ```markdown
+>    ## MODIFIED Requirements
+>    ### Requirement: <existing requirement name>
+>    [Full requirement text unchanged — dependency migration only, no behavior change]
+>    **Structural notes**: Dependency updated for security/currency. No behavior change.
+>    #### Scenario: <existing scenario name>
+>    [All scenarios unchanged]
+>    ```
+> 4. Run `openspec validate modernize-<slug> --strict` and fix any issues before returning.
+> Produce an Agent Handoff with the change id, task count, and validate result.
+
+**Phase completion requires `openspec validate modernize-<slug> --strict` to pass.** If it does not pass, surface the validation errors in the Phase Handoff `Open` field.
+
+---
+
 ## Team cleanup
 
 ```text
@@ -277,6 +325,7 @@ SendMessage({ to: "general-purpose", message: {type: "shutdown_request"} })
 SendMessage({ to: "investigator",    message: {type: "shutdown_request"} })
 SendMessage({ to: "architect",       message: {type: "shutdown_request"} })
 SendMessage({ to: "contrarian",      message: {type: "shutdown_request"} })
+SendMessage({ to: "pm",              message: {type: "shutdown_request"} })
 TeamDelete()
 ```
 
@@ -289,6 +338,7 @@ Phase 2 is complete when:
 - Contrarian's exclusion list and revised estimates are incorporated
 - Investigator's file completeness check findings are addressed
 - Architect has confirmed all findings resolved
+- `openspec validate modernize-<slug> --strict` passes
 
 Produce a **Phase Handoff**:
 
@@ -298,16 +348,20 @@ Phase:     Research
 Status:    complete  (or: blocked — only patch/minor updates remain)
 Scope:     <scope>
 Branch:    <branch>
+OpenSpec:  modernize-<slug>
 Artifacts:
   .claude/workflow/<slug>/migration-plan.md
+  openspec/changes/modernize-<slug>/proposal.md
+  openspec/changes/modernize-<slug>/tasks.md
 Decisions:
   - <exclusions with rationale>
   - <grouped migrations>
   - <complexity revisions from Contrarian>
+  - openspec validate: clean
 For next:  <what Migrate needs: total task count, Batch A dep count,
             Batch B task count, Batch C task count, which tasks are complex
             or low-confidence (need extra Developer iterations), grouped
-            migration task IDs, migration plan path>
-Open:      <user decisions on exclusions or scope, or "none">
+            migration task IDs. Task source of truth: openspec/changes/modernize-<slug>/tasks.md>
+Open:      <user decisions on exclusions or scope, or openspec validate errors, or "none">
 === END HANDOFF ===
 ```
