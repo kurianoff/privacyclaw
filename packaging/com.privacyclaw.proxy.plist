@@ -6,11 +6,17 @@
     <key>Label</key>
     <string>com.privacyclaw.proxy</string>
 
+    <!-- Launch the tray app through macOS 'open' so it gets a proper GUI session
+         (direct exec via launchd does not receive window-server access).
+         The poll loop keeps this job alive until privacyclaw exits, so launchd
+         can restart it via KeepAlive if the app crashes or the user quits. -->
+    <key>Program</key>
+    <string>/bin/sh</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/local/bin/privacyclaw</string>
-        <string>start</string>
-        <string>--tray</string>
+        <string>/bin/sh</string>
+        <string>-c</string>
+        <string>open -ga Privacyclaw; while pgrep -f "privacyclaw start --tray" &gt; /dev/null; do sleep 2; done</string>
     </array>
 
     <key>RunAtLoad</key>
@@ -23,9 +29,9 @@
     <integer>5</integer>
 
     <key>StandardOutPath</key>
-    <string>~/Library/Logs/privacyclaw/proxy.log</string>
+    <string>/tmp/privacyclaw-proxy.log</string>
 
     <key>StandardErrorPath</key>
-    <string>~/Library/Logs/privacyclaw/proxy.log</string>
+    <string>/tmp/privacyclaw-proxy.log</string>
 </dict>
 </plist>

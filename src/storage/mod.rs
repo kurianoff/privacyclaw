@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::{BufRead, Write};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -83,6 +84,10 @@ pub struct Store {
     /// Serialises concurrent appends to the same conversation file.
     /// Held only during the actual write(), not during any reads.
     write_lock: Arc<Mutex<()>>,
+    /// Cache from conv_id → file path.
+    /// Populated on insert_conversation; consulted before read_dir scan.
+    /// Files are only created, never renamed, so the cache never goes stale.
+    path_cache: Arc<Mutex<HashMap<String, PathBuf>>>,
 }
 
 impl Store {
@@ -92,15 +97,25 @@ impl Store {
         Ok(Self {
             logs_dir: logs_dir.to_path_buf(),
             write_lock: Arc::new(Mutex::new(())),
+            path_cache: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
     // ── path helpers ──────────────────────────────────────────────────────────
 
     fn conv_file_path(&self, conv_id: &str) -> Option<PathBuf> {
+        // Fast path: check cache before performing a read_dir scan.
+        {
+            let cache = self.path_cache.lock().unwrap();
+            if let Some(p) = cache.get(conv_id) {
+                tracing::debug!(conv_id = %conv_id, "storage: conv_file_path cache hit");
+                return Some(p.clone());
+            }
+        }
+        // Cache miss: fall back to O(N) directory scan.
         let suffix = format!("_{}.ndjson", conv_id);
         tracing::debug!(conv_id = %conv_id, suffix = %suffix, "storage: conv_file_path scan");
-        std::fs::read_dir(&self.logs_dir)
+        let found = std::fs::read_dir(&self.logs_dir)
             .ok()?
             .flatten()
             .map(|e| e.path())
@@ -109,7 +124,13 @@ impl Store {
                     .and_then(|n| n.to_str())
                     .map(|n| n.ends_with(&suffix))
                     .unwrap_or(false)
-            })
+            })?;
+        // Populate cache for future lookups.
+        self.path_cache
+            .lock()
+            .unwrap()
+            .insert(conv_id.to_string(), found.clone());
+        Some(found)
     }
 
     fn new_conv_file_path(&self, conv_id: &str) -> PathBuf {
@@ -160,6 +181,11 @@ impl Store {
         let line = serde_json::to_string(conv)? + "\n";
         std::fs::write(&path, line.as_bytes())
             .with_context(|| format!("write conv {:?}", path))?;
+        // Populate path cache so subsequent conv_file_path calls skip read_dir.
+        self.path_cache
+            .lock()
+            .unwrap()
+            .insert(conv.id.clone(), path.clone());
         tracing::info!(conv_id = %conv.id, path = %path.display(), "storage: insert_conversation ok");
         Ok(())
     }
@@ -237,6 +263,25 @@ impl Store {
         Self::read_messages(&path)
     }
 
+    /// Fetch a single conversation by its ID.
+    ///
+    /// Uses `conv_file_path` (which after T7 benefits from the path cache) to
+    /// locate the file directly, avoiding the O(N_files) scan that
+    /// `list_conversations` would perform.
+    ///
+    /// Returns `None` when no conversation with the given ID exists.
+    pub fn get_conversation_by_id(&self, conv_id: &str) -> Option<Conversation> {
+        let path = self.conv_file_path(conv_id)?;
+        tracing::debug!(conv_id = %conv_id, path = %path.display(), "storage: get_conversation_by_id");
+        match Self::read_conv_header(&path) {
+            Ok(conv) => Some(conv),
+            Err(e) => {
+                tracing::warn!(conv_id = %conv_id, err = %e, "storage: get_conversation_by_id: read failed");
+                None
+            }
+        }
+    }
+
     /// Find a today's conversation by provider + fingerprint.
     /// Reads only line 1 of each today's file — O(N_today × header_size).
     pub fn find_conversation_by_fingerprint(
@@ -266,7 +311,11 @@ impl Store {
     }
 
     /// Count request-direction messages stored for a conversation.
-    /// Sequential line scan — no JSON tree allocation for the whole file.
+    ///
+    /// Uses JSON parsing rather than substring matching to avoid false positives
+    /// when message bodies contain the literal string `"direction":"request"`.
+    /// Lines that fail to parse (vault/detection lines) return `false` and are
+    /// skipped, preserving the existing skip-first-line behaviour.
     pub fn count_request_messages(&self, conversation_id: &str) -> usize {
         let Some(path) = self.conv_file_path(conversation_id) else {
             return 0;
@@ -281,7 +330,10 @@ impl Store {
             .filter(|(i, line)| {
                 if *i == 0 { return false; } // skip conv header
                 line.as_ref()
-                    .map(|l| l.contains("\"direction\":\"request\""))
+                    .map(|l| {
+                        serde_json::from_str::<Message>(l)
+                            .map_or(false, |m| m.direction == "request")
+                    })
                     .unwrap_or(false)
             })
             .count();
@@ -354,11 +406,23 @@ impl Store {
         };
         let vault_line = serde_json::to_string(&persisted)? + "\n";
 
+        // Read the file content before acquiring the write lock to minimise
+        // lock hold time (O(file_size) I/O stays outside the critical section).
+        let pre_content = std::fs::read_to_string(&path)
+            .with_context(|| format!("read {:?} for vault save", path))?;
+        let vault_already_exists = pre_content.contains("\"type\":\"vault\"");
+
         let _guard = self.write_lock.lock().unwrap();
 
-        // Read existing file lines inside the lock to avoid TOCTOU races.
-        let content = std::fs::read_to_string(&path)
-            .with_context(|| format!("read {:?} for vault save", path))?;
+        // Re-read only to determine current line positions when a vault line
+        // already exists (need fresh line positions after any concurrent append).
+        // For the append-only path the pre_content check is sufficient.
+        let content = if vault_already_exists {
+            std::fs::read_to_string(&path)
+                .with_context(|| format!("re-read {:?} for vault update", path))?
+        } else {
+            pre_content
+        };
 
         // Check if a vault line already exists.
         let mut lines: Vec<&str> = content.lines().collect();
@@ -664,6 +728,35 @@ mod tests {
         store.batch_insert_messages(&resp_msgs).unwrap();
         let count = store.count_request_messages("conv-1");
         assert_eq!(count, 5);
+    }
+
+    #[test]
+    fn test_count_request_messages_no_false_positive_in_body() {
+        // A response message whose body contains the literal substring
+        // `"direction":"request"` must NOT be counted.
+        let (store, _dir) = temp_store();
+        let conv = make_conv("conv-fp", "anthropic", "fp-fp");
+        store.insert_conversation(&conv).unwrap();
+
+        let tricky = Message {
+            id: "tricky".to_string(),
+            conversation_id: "conv-fp".to_string(),
+            direction: "response".to_string(),
+            timestamp: "2026-03-17T00:00:00Z".to_string(),
+            role: Some("assistant".to_string()),
+            content: r#"The JSON has "direction":"request" in the body"#.to_string(),
+            tokens_in: None,
+            tokens_out: None,
+            content_masked: None,
+            pii_processed: None,
+        };
+        store.insert_message(&tricky).unwrap();
+
+        let real_req = make_msg("real-req", "conv-fp", "request");
+        store.insert_message(&real_req).unwrap();
+
+        let count = store.count_request_messages("conv-fp");
+        assert_eq!(count, 1, "only the real request should be counted");
     }
 
     // ── 3.3 Concurrency ───────────────────────────────────────────────────────

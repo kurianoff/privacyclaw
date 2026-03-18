@@ -1,0 +1,837 @@
+   Compiling privacyclaw v0.3.0 (/Users/constantine/github/kurianoff/kladovka)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.25s
+     Running unittests src/lib.rs (target/debug/deps/privacyclaw-a350018b12aed9ac)
+
+running 372 tests
+test config::tests::is_t3_standalone_true_for_standalone_combo ... ok
+test config::tests::is_t3_standalone_false_no_slm ... ok
+test config::tests::is_t3_standalone_false_for_full_stack ... ok
+test ca::tests::postinstall_should_skip_ca_returns_false_when_absent ... ok
+test ca::tests::postinstall_should_skip_ca_returns_true_when_present ... ok
+test config::tests::patch_tier3_with_all_tiers_ok ... ok
+test config::tests::patch_tier3_standalone_is_allowed ... ok
+test config::tests::patch_pii_mode_changes_key ... ok
+test config::tests::patch_tier2_without_tier1_is_error ... ok
+test config::tests::patch_same_value_no_changed_keys ... ok
+test config::tests::patch_port_sets_restart_required ... ok
+test config::tests::test_config_hotreload_off_to_replace ... ok
+test config::tests::patch_tier3_without_tier2_is_error ... ok
+test config::tests::validate_pii_tiers_standalone_accepted ... ok
+test config::tests::validate_pii_tiers_t2_without_t1_still_rejected ... ok
+test config::tests::test_patch_config_ner_flag_persists ... ok
+test dashboard::tests::parse_query_limit_missing_limit_key_returns_none ... ok
+test dashboard::tests::parse_query_limit_extracts_n ... ok
+test dashboard::tests::parse_query_limit_extra_params_still_works ... ok
+test dashboard::tests::parse_query_limit_no_query_string_returns_none ... ok
+test dashboard::tests::parse_query_limit_non_numeric_returns_none ... ok
+test dashboard::tests::ws_event_message_none_optional_fields_absent_from_json ... ok
+test dashboard::tests::ws_event_message_extra_fields_ignored_by_minimal_consumer ... ok
+test dashboard::tests::ws_event_message_pii_processed_false_appears_in_json ... ok
+test dashboard::tests::ws_event_message_with_optional_fields_serialises ... ok
+test dashboard::tests::ws_event_message_type_tag_is_message ... ok
+test models::tests::catalog_ids_match_spec ... ok
+test models::tests::get_api_entries_marks_active_model ... ok
+test models::tests::get_api_entries_returns_all_catalog_entries ... ok
+test models::tests::get_api_entries_marks_downloaded_when_file_exists ... ok
+test models::tests::is_downloaded_detects_gguf_and_onnx ... ok
+test network_helper::tests::test_build_pf_anchor_contains_port ... ok
+test network_helper::tests::test_build_hosts_entries_only_given_domains ... ok
+test network_helper::tests::test_build_hosts_entries_idempotent ... ok
+test network_helper::tests::test_build_hosts_entries_no_duplicates ... ok
+test network_helper::tests::test_domain_list_change ... ok
+test models::tests::download_tracker_register_cancel_complete ... ok
+test network_helper::tests::test_build_pf_anchor_custom_port ... ok
+test network_helper::tests::test_has_privacyclaw_entries_false ... ok
+test network_helper::tests::test_has_privacyclaw_entries_true ... ok
+test network_helper::tests::test_insert_pf_conf_include_no_anchor_line ... ok
+test network_helper::tests::test_insert_pf_conf_include_idempotent ... ok
+test network_helper::tests::test_insert_pf_conf_include_position ... ok
+test network_helper::tests::test_pf_conf_include_roundtrip ... ok
+test network_helper::tests::test_pf_conf_insert_remove_roundtrip ... ok
+test network_helper::tests::test_remove_privacyclaw_lines ... ok
+test parser::anthropic::tests::test_empty_delta_returns_none ... ok
+test parser::anthropic::tests::test_extract_delta_from_content_block_delta ... ok
+test parser::anthropic::tests::test_extract_tokens_from_message_delta ... ok
+test parser::anthropic::tests::test_extract_tokens_from_message_start ... ok
+test parser::anthropic::tests::test_non_delta_event_returns_none ... ok
+test parser::anthropic::tests::test_parse_malformed_json_returns_none ... ok
+test parser::anthropic::tests::test_parse_missing_model_returns_none ... ok
+test parser::anthropic::tests::test_parse_image_block_elided ... ok
+test parser::anthropic::tests::test_parse_model_and_messages ... ok
+test parser::anthropic::tests::test_parse_tool_use_content_array ... ok
+test parser::google::tests::test_google_extract_delta_from_candidates ... ok
+test parser::google::tests::test_google_parse_contents_field ... ok
+test parser::openai::tests::test_openai_done_sentinel_is_none ... ok
+test parser::openai::tests::test_openai_extract_delta_from_choices ... ok
+test parser::openai::tests::test_openai_parse_model_and_messages ... ok
+test parser::sse::tests::test_comment_lines_ignored ... ok
+test parser::sse::tests::test_done_sentinel ... ok
+test parser::sse::tests::test_byte_by_byte_same_as_full_push ... ok
+test parser::sse::tests::test_empty_event_skipped ... ok
+test parser::sse::tests::test_event_type_without_data_skipped ... ok
+test parser::sse::tests::test_event_type ... ok
+test parser::sse::tests::test_lf_only_line_endings ... ok
+test parser::sse::tests::test_message_stop_event_parsed_correctly ... ok
+test parser::sse::tests::test_multi_line_data_concatenated ... ok
+test parser::sse::tests::test_multiple_events ... ok
+test parser::sse::tests::test_partial_chunks ... ok
+test parser::sse::tests::test_simple_event ... ok
+test parser::tests::test_unknown_provider_falls_back_to_openai_format ... ok
+test pid::tests::test_read_pid_absent_returns_none ... ok
+test pid::tests::test_remove_pid_absent_is_noop ... ok
+test pid::tests::test_read_pid_garbage_returns_none ... ok
+test pid::tests::test_pid_file_contains_current_pid ... ok
+test parser::sse::tests::test_1000_events_in_one_push ... ok
+test pii::buffer::tests::test_empty_vault_immediate_flush ... ok
+test pid::tests::test_write_read_remove_roundtrip ... ok
+test pii::buffer::tests::test_accumulation_across_many_chunks ... ok
+test pii::buffer::tests::test_flush_remaining_empty_buffer ... ok
+test pii::buffer::tests::test_empty_delta_returns_empty ... ok
+test pii::buffer::tests::test_flush_remaining_at_eos ... ok
+test pii::buffer::tests::test_holdback_triggered_by_prefix_match ... ok
+test pii::buffer::tests::test_multibyte_char_at_tail_boundary ... ok
+test pii::buffer::tests::test_multiple_tokens_in_one_chunk ... ok
+test pii::buffer::tests::test_no_trigger_char_immediate_flush ... ok
+test pii::buffer::tests::test_single_chunk_replacement ... ok
+test pii::buffer::tests::test_no_holdback_on_english_prose_with_ipv6_in_vault ... ok
+test pii::buffer::tests::test_token_at_very_start ... ok
+test pii::synth::tests::test_bearer_token_format ... ok
+test pii::synth::tests::test_credit_card_luhn_valid ... ok
+test parser::tests::test_parse_request_scaling_182_turns_under_50ms ... ok
+test pii::synth::tests::test_deterministic_with_same_seed ... ok
+test pii::buffer::tests::test_token_split_across_chunks ... ok
+test pii::synth::tests::test_email_format ... ok
+test pii::buffer::tests::test_throughput_1mb_no_pii_under_5ms ... ok
+test pii::synth::tests::test_different_seeds_produce_different_output ... ok
+test pii::synth::tests::test_gen_ipv6_length ... ok
+test pii::synth::tests::test_get_or_create_idempotent ... ok
+test pii::synth::tests::test_openai_key_prefix_preserved ... ok
+test pii::synth::tests::test_phone_format ... ok
+test pii::synth::tests::test_ssn_format ... ok
+test pii::tests::inject_system_instruction_anthropic_existing_system_appends ... ok
+test pii::tests::inject_system_instruction_anthropic_no_system_creates_field ... ok
+test pii::tests::inject_system_instruction_google_noop ... ok
+test pii::tests::inject_system_instruction_openai_existing_system_msg_appends ... ok
+test pii::synth::tests::test_gen_ipv6_format_is_valid_ula ... ok
+test pii::tests::inject_system_instruction_openai_no_system_msg_inserts_at_index_0 ... ok
+test pii::synth::tests::test_get_or_create_same_original_different_types ... ok
+test pii::synth::tests::test_ipv4_rfc1918_prefix ... ok
+test pii::tests::pii_mode_off_pipeline_not_called ... ok
+test pii::buffer::tests::test_ipv6_synthetic_max_key_len_short ... ok
+test pii::tests::test_log_detections_does_not_panic ... ok
+test pii::tests::test_log_detections_empty_spans ... ok
+test pii::tests::test_log_detections_masks_originals ... ok
+test pii::tests::test_merge_spans_both_empty ... ok
+test pii::tests::test_merge_spans_includes_tier2_person_name ... ok
+test pii::tests::test_merge_spans_one_empty ... ok
+test pii::tests::test_merge_spans_partial_overlap_keeps_high_confidence ... ok
+test pii::tests::test_merge_spans_preserves_non_overlapping ... ok
+test pii::tests::test_merge_spans_removes_overlaps ... ok
+test pii::tests::test_merge_spans_three_non_overlapping_sorted ... ok
+test pii::tests::test_pii_mode_default ... ok
+test parser::sse::tests::test_1mb_data_line_no_panic ... ok
+test pii::tests::test_pii_mode_detect_only_serialization ... ok
+test pii::tests::pipeline_full_stack_slm_standalone_false ... ok
+test pii::tests::pipeline_slm_standalone_flag_true_and_tier2_none ... ok
+test pii::tests::test_pii_mode_serde_roundtrip ... ok
+test parser::sse::tests::test_large_stream_throughput ... ok
+test pii::tests::test_process_request_body_google_format ... ok
+test pii::tests::test_process_request_body_invalid_json ... ok
+test pii::tests::test_process_request_body_no_messages_field ... ok
+test pii::tests::test_process_request_body_anthropic_multipart ... ok
+test pii::tests::test_pii_mode_off_body_with_no_pii_returns_none ... ok
+test pii::tests::pii_mode_detect_only_body_unchanged ... ok
+test pii::tests::test_process_request_body_openai_multiple_messages ... ok
+test pii::tests::test_process_request_body_openai_multiple_pii_types ... ok
+test pii::tests::test_process_request_body_openai_no_pii ... ok
+test pii::tests::test_rebuild_request_lowercase_content_length ... ok
+test pii::tests::test_rebuild_request_no_content_length_header ... ok
+test pii::tests::test_rebuild_request_preserves_other_headers ... ok
+test pii::tests::test_rebuild_request_updates_content_length ... ok
+test pii::tests::test_slm_disabled_when_tiers_slm_false ... ok
+test pii::tests::test_tier2_disabled_returns_only_tier1 ... ok
+test pii::tests::pii_mode_replace_modifies_body ... ok
+test pii::tests::test_pii_mode_replace_vault_populated ... ok
+test pii::tests::test_process_request_body_openai_with_email ... ok
+test pii::tests::test_process_request_body_openai_system_message ... ok
+test pii::tier1::tests::test_aws_access_key_detected ... ok
+test pii::tier1::tests::test_bearer_token_detected ... ok
+test pii::tests::test_tier2_absent_when_ner_disabled_no_panic ... ok
+test pii::tier1::tests::test_aadhaar_detected ... ok
+test pii::tier1::tests::test_aadhaar_not_detected_without_spaces ... ok
+test pii::tier1::tests::test_cpf_valid_fn ... ok
+test pii::tier1::tests::test_credit_card_luhn_invalid ... ok
+test pii::tier1::tests::test_cnpj_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_credit_card_luhn_valid ... ok
+test pii::tier1::tests::test_credit_card_no_luhn_invalid_rejected ... ok
+test pii::tier1::tests::test_db_connection_detected ... ok
+test pii::tier1::tests::test_cpf_all_same_rejected ... ok
+test pii::tier1::tests::test_cnpj_detected ... ok
+test pii::tier1::tests::test_detect_in_json_messages_returns_message_index ... ok
+test pii::tier1::tests::test_email_detected ... ok
+test pii::tier1::tests::test_cpf_invalid_check_digit_rejected ... ok
+test pii::tier1::tests::test_de_steuer_id_rejected_zero_start ... ok
+test pii::tier1::tests::test_cpf_valid_detected ... ok
+test pii::tier1::tests::test_github_pat_detected ... ok
+test pii::tier1::tests::test_de_steuer_id_detected ... ok
+test pii::tier1::tests::test_ipv4_detected ... ok
+test pii::tier1::tests::test_ipv4_not_false_positive_version ... ok
+test pii::tier1::tests::test_fr_insee_rejected_wrong_start ... ok
+test pii::tier1::tests::test_ipv6_no_false_positive_double_colon_only ... ok
+test pii::tier1::tests::test_ipv6_abbreviated_detected ... ok
+test pii::tier1::tests::test_ipv6_detected ... ok
+test pii::tier1::tests::test_ipv6_no_false_positive_rust_path ... ok
+test pii::tier1::tests::test_in_pan_detected ... ok
+test pii::tier1::tests::test_fr_insee_detected ... ok
+test pii::tier1::tests::test_luhn_valid ... ok
+test pii::tier1::tests::test_in_pan_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_no_false_positive_on_git_sha ... ok
+test pii::tier1::tests::test_no_pii_text ... ok
+test pii::tier1::tests::test_multiple_pii_in_text ... ok
+test pii::tier1::tests::test_openai_key_no_false_positive_short ... ok
+test pii::tier1::tests::test_ko_brn_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_openai_key_detected ... ok
+test pii::tier1::tests::test_replace_in_text ... ok
+test pii::tier1::tests::test_ko_rrn_detected ... ok
+test pii::tier1::tests::test_phone_not_false_positive ... ok
+test pii::tier1::tests::test_ko_rrn_rejected_invalid_gender_digit ... ok
+test pii::tier1::tests::test_phone_detected_us_format ... ok
+test pii::tier1::tests::test_replace_in_text_multiple_types ... ok
+test pii::tier1::tests::test_ssn_666_prefix_rejected ... ok
+test pii::tier1::tests::test_ssn_9xx_prefix_rejected ... ok
+test pii::tier1::tests::test_ssn_detected ... ok
+test pii::tier1::tests::test_spans_are_non_overlapping ... ok
+test pii::tier1::tests::test_ssn_invalid_prefix_not_detected ... ok
+test pii::tier1::tests::test_ssh_private_key_detected ... ok
+test pii::tier1::tests::test_ssn_space_separator ... ok
+test pii::tier1::tests::test_tier1_bearer_token_detection ... ok
+test pii::tier1::tests::test_tier1_email_detection ... ok
+test pii::tier1::tests::test_ko_brn_detected ... ok
+test pii::tier1::tests::test_tier1_no_false_positives ... ok
+test pii::tier1::tests::test_tier1_disabled_returns_no_spans ... ok
+test pii::tier2::tests::test_load_nonexistent_model_returns_error ... ok
+test pii::tier1::tests::test_uk_nin_not_detected_in_en_us ... ok
+test pii::tier2::tests::test_multibyte_utf8_offsets ... ok
+test pii::tier1::tests::test_tier1_ssn_detection ... ok
+test pii::tier2::tests::test_num_labels_cap_uses_d3_not_d1 ... ok
+test pii::tier2::tests::test_text_starts_at_byte_offset ... ok
+test pii::tier2::tests::test_token_exceeding_text_length_is_skipped ... ok
+test pii::tier2::tests::test_token_in_label_prefix_is_skipped ... ok
+test pii::tier2::tests::test_token_in_text_maps_correctly ... ok
+test pii::tier2::tests::test_token_straddling_boundary_is_skipped ... ok
+test pii::tier2::tests::test_zero_length_span_is_skipped ... ok
+test pii::tier1::tests::test_uk_nin_detected ... ok
+test pii::tier1::tests::test_url_with_creds_detected ... ok
+test pii::tier3::tests::detect_and_rewrite_timeout_returns_none ... ok
+test pii::tier3::tests::extract_pairs_alignment_failure_skips_token ... ok
+test pii::tier3::tests::extract_pairs_ambiguous_boundary_first_consumes_to_next_marker ... ok
+test pii::tier3::tests::extract_pairs_majority_failure_returns_partial_and_warns ... ok
+test pii::tier3::tests::extract_pairs_no_markers_returns_empty ... ok
+test pii::tier3::tests::extract_pairs_passthrough_text_advances_correctly ... ok
+test pii::tier3::tests::extract_pairs_single_span_email ... ok
+test pii::tier3::tests::extract_pairs_two_spans_order_preserved ... ok
+test pii::tier3::tests::extract_pairs_unclosed_marker_at_eos_skips ... ok
+test pii::tier3::tests::sidecar_start_args_do_not_include_n_predict ... ok
+test pii::tier3::tests::test_build_prompt_contains_span_info ... ok
+test pii::tier3::tests::test_build_prompt_includes_all_indices ... ok
+test pii::tier3::tests::test_disambiguate_empty_candidates ... ok
+test pii::tier3::tests::detect_and_rewrite_no_section_sign_returns_none ... ok
+test pii::tier3::tests::detect_and_rewrite_parses_well_formed_response ... ok
+test pii::tier3::tests::detect_and_rewrite_http_500_returns_none ... ok
+test pii::tier3::tests::test_sidecar_start_missing_binary_fails ... ok
+test pii::tier3::tests::test_disambiguate_timeout_returns_candidates_unchanged ... ok
+test pii::tier3::tests::detect_and_rewrite_sends_correct_max_tokens_and_system_prompt ... ok
+test pii::tier3::tests::test_slm_sidecar_constructor ... ok
+test pii::tier3::tests::test_tier3_disabled_slm_field_is_none ... ok
+test pii::tier3::tests::test_tier3_tiers_slm_false_no_sidecar ... ok
+test pii::tier3::tests::test_slm_sidecar_trims_trailing_slash ... ok
+test pii::vault::tests::from_records_restores_confidence ... ok
+test pii::vault::tests::from_records_zero_confidence_preserved ... ok
+test pii::vault::tests::idempotent_add_does_not_duplicate_confidence_entry ... ok
+test pii::tier3::tests::test_tier3_timeout_returns_candidates_unchanged ... ok
+test pii::vault::tests::quints_empty_vault_returns_empty_iterator ... ok
+test pii::vault::tests::quints_returns_correct_five_tuples ... ok
+test pii::vault::tests::test_add_and_get_mapping ... ok
+test pii::vault::tests::test_deterministic_rng_different_conv_ids ... ok
+test pii::vault::tests::test_deterministic_seed ... ok
+test pii::vault::tests::test_empty_vault_replace ... ok
+test pii::vault::tests::test_full_round_trip_forward_and_back ... ok
+/bin/sh: --model: invalid option
+Usage:	/bin/sh [GNU long option] [option] ...
+	/bin/sh [GNU long option] [option] script-file ...
+GNU long options:
+	--debug
+	--debugger
+	--dump-po-strings
+	--dump-strings
+	--help
+	--init-file
+	--login
+	--noediting
+	--noprofile
+	--norc
+	--posix
+	--protected
+	--rcfile
+	--restricted
+	--verbose
+	--version
+	--wordexp
+Shell options:
+	-irsD or -c command or -O shopt_option		(invocation only)
+	-abefhkmnptuvxBCHP or -o option
+test pii::vault::tests::test_idempotent_add ... ok
+test pii::vault::tests::quints_count_equals_mapping_count ... ok
+test pii::vault::tests::test_mapping_count ... ok
+test pii::vault::tests::test_registry_creates_distinct_vaults ... ok
+test pii::vault::tests::test_pairs_iter ... ok
+test pii::vault::tests::test_registry_get_or_create_idempotent ... ok
+test pii::vault::tests::test_replace_originals_empty_vault ... ok
+test pii::vault::tests::test_replace_originals_basic ... ok
+test pii::tier3::tests::test_disambiguate_mock_server_confirms_subset ... ok
+test pii::vault::tests::test_replace_synthetics_multiple_matches ... ok
+test pii::vault::tests::test_replace_synthetics_longest_match ... ok
+test pii::vault::tests::test_replace_synthetics_no_match ... ok
+test pii::vault::tests::test_replace_originals_multiple_mappings ... ok
+test pii::vault::tests::test_replace_synthetics_partial_overlap ... ok
+test pii::vault::tests::test_replace_synthetics_round_trip ... ok
+test pii::vault::tests::test_vault_from_records ... ok
+test pii::vault::tests::test_synthetic_key_prefixes ... ok
+test pii::vault::tests::test_vault_to_records ... ok
+test pii::vault::tests::test_synthetic_key_prefixes_mixed_types ... ok
+test proxy::intercept::tests::entity_type_label_already_uppercased ... ok
+test proxy::intercept::tests::entity_type_label_empty_string_does_not_panic ... ok
+test proxy::intercept::tests::entity_type_label_lowercased_email ... ok
+test proxy::intercept::tests::entity_type_label_mixed_case ... ok
+test proxy::intercept::tests::entity_type_label_unicode_uppercased ... ok
+test proxy::intercept::tests::detection_records_stored_with_correct_message_id ... ok
+test proxy::intercept::tests::phase_a_returns_same_conv_id_for_same_fingerprint ... ok
+test proxy::intercept::tests::phase_a_different_body_different_conv_id ... ok
+test proxy::intercept::tests::phase_b_content_masked_none_when_passthrough ... ok
+test proxy::intercept::tests::phase_b_stores_content_masked_when_pii_active ... ok
+test proxy::intercept::tests::test_client_disconnect_mid_response_still_stores ... ok
+test pii::tier3::tests::test_slm_http_500_returns_candidates_unchanged ... ok
+test proxy::intercept::tests::test_anthropic_message_stop_terminates_stream ... ok
+test proxy::intercept::tests::test_concurrent_same_fingerprint ... ok
+test proxy::intercept::tests::test_content_length_correct_after_replacement ... ok
+test pii::tests::test_pipeline_process_request_182_turns_under_100ms ... ok
+test proxy::intercept::tests::test_conversation_start_ws_event_for_new_conv ... ok
+test proxy::intercept::tests::test_large_request_response_forwarded_verbatim ... ok
+test proxy::intercept::tests::test_new_conversation_created_on_first_request ... ok
+test proxy::intercept::tests::test_new_messages_only_stored_on_continuation ... ok
+test proxy::intercept::tests::test_openai_done_sentinel_terminates_stream ... ok
+test proxy::intercept::tests::test_per_request_state_reset ... ok
+test proxy::intercept::tests::test_pii_detected_ws_event_fired ... ok
+test proxy::intercept::tests::test_pii_mode_detect_only_body_unchanged ... ok
+test pii::tier1::tests::test_tier1_10kb_under_5ms ... ok
+test proxy::intercept::tests::test_pii_request_sanitised_before_upstream ... ok
+test proxy::intercept::tests::test_pii_mode_off_proxy_byte_identical ... ok
+test proxy::intercept::tests::test_pii_sse_response_reversed_to_client ... ok
+test proxy::intercept::tests::test_proxy_does_not_modify_request_bytes ... ok
+test proxy::intercept::tests::test_proxy_does_not_modify_response_bytes ... ok
+test proxy::intercept::tests::test_response_complete_ws_event_fired ... ok
+test proxy::intercept::tests::test_response_stored_after_sse_complete ... ok
+test proxy::intercept::tests::test_small_request_response_forwarded_verbatim ... ok
+test proxy::intercept::tests::test_tokens_extracted_and_stored ... ok
+test proxy::intercept::tests::test_ten_turns_on_one_connection ... ok
+test proxy::intercept::tests::test_twenty_concurrent_sessions ... ok
+test proxy::intercept::tests::test_sse_split_across_tiny_chunks ... ok
+test proxy::intercept::tests::test_two_concurrent_sessions_dont_interfere ... ok
+test proxy::intercept::tests::test_two_turns_on_one_connection ... ok
+test proxy::intercept::tests::test_upstream_death_sends_tls_close_notify_equivalent ... ok
+test pii::vault::tests::test_vault_registry_ttl_eviction ... ok
+test proxy::intercept::tests::test_upstream_eof_mid_sse_finalizes_partial ... ok
+test proxy::intercept::tests::test_upstream_idle_timeout_fires ... ok
+test proxy::intercept::tests::test_upstream_eof_signals_passthrough_c2u_to_exit ... ok
+test proxy::intercept::tests::test_upstream_eof_signals_pii_c2u_to_exit ... ok
+test proxy::network::tests::test_dns_query_packet_format ... ok
+test proxy::network::tests::test_intercept_decision_known_hosts ... ok
+test proxy::network::tests::test_intercept_decision_unknown_host ... ok
+test proxy::network::tests::test_peek_sni_extracts_hostname ... ok
+test proxy::network::tests::test_peek_sni_returns_none_for_garbage ... ok
+test proxy::network::tests::test_peek_sni_returns_none_for_truncated_buffer ... ok
+test storage::tests::insert_and_load_detections_filtered ... ok
+test storage::tests::insert_and_load_detections_unfiltered ... ok
+test storage::tests::load_detections_empty_file_returns_empty_vec ... ok
+test storage::tests::load_detections_filter_no_match_returns_empty ... ok
+test storage::tests::message_all_pii_fields_none_json_omits_them ... ok
+test storage::tests::message_legacy_json_without_new_fields_deserialises_as_none ... ok
+test storage::tests::message_pii_processed_false_serialises ... ok
+test storage::tests::message_with_pii_fields_round_trips ... ok
+test storage::tests::stored_vault_record_legacy_json_missing_confidence_and_tier_is_none ... ok
+test storage::tests::stored_vault_record_none_fields_omitted_from_json ... ok
+test storage::tests::stored_vault_record_with_confidence_round_trips ... ok
+test storage::tests::test_batch_insert_missing_conv_is_noop ... ok
+test storage::tests::test_batch_insert_preserves_order ... ok
+test storage::tests::test_concurrent_batch_inserts_no_corruption ... ok
+test storage::tests::test_count_request_messages_counts_only_requests ... ok
+test storage::tests::test_different_provider_same_fingerprint_separate ... ok
+test proxy::intercept::tests::test_upstream_immediate_eof_no_panic ... ok
+test storage::tests::test_insert_and_get_conversation ... ok
+test storage::tests::test_insert_and_get_messages_in_order ... ok
+test storage::tests::test_load_vault_no_vault_line ... ok
+test proxy::intercept::tests::test_ws_text_delta_events_fired ... ok
+test storage::tests::test_load_vault_nonexistent_conv ... ok
+test storage::tests::test_same_fingerprint_same_conv ... ok
+test storage::tests::test_malformed_message_line_skipped ... ok
+test storage::tests::test_save_and_load_vault_basic ... ok
+test storage::tests::test_save_vault_empty_records ... ok
+test storage::tests::test_save_vault_multiple_records ... ok
+test storage::tests::test_unknown_fingerprint_returns_none ... ok
+test storage::tests::test_save_vault_overwrites_existing ... ok
+test uninstall::tests::test_has_failures_detects_failed_step ... ok
+test uninstall::tests::test_has_failures_no_failures ... ok
+test uninstall::tests::test_outcome_symbols ... ok
+test uninstall::tests::test_purge_flag_controls_data_step ... ok
+test uninstall::tests::test_skipped_symbol ... ok
+test uninstall::tests::test_step_stop_no_pid_skipped ... ok
+test util::tests::test_authorization_header_redacted ... ok
+test util::tests::test_fmt_chunk_hex_empty_input ... ok
+test util::tests::test_fmt_chunk_hex_short_input_not_truncated ... ok
+test util::tests::test_fmt_chunk_hex_truncates_at_256_bytes ... ok
+test util::tests::test_other_headers_not_redacted ... ok
+test util::tests::test_x_api_key_header_redacted ... ok
+test version::tests::test_version_string_format ... ok
+test storage::tests::test_write_lock_serializes_appends ... ok
+test storage::tests::test_list_conversations_newest_first ... ok
+test proxy::intercept::tests::test_upstream_gone_flag_prevents_write_in_passthrough ... ok
+test proxy::intercept::tests::test_sse_accumulation_buffer_cap ... ok
+test proxy::intercept::tests::test_unparseable_request_no_storage_no_panic ... ok
+kill: '75696': No such process
+test pid::tests::test_stop_process_terminates_sleeping_child ... ok
+test pii::tier3::tests::test_sidecar_drop_does_not_panic ... ok
+
+test result: ok. 372 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.40s
+
+     Running unittests src/main.rs (target/debug/deps/privacyclaw-f1153a62a238f753)
+
+running 374 tests
+test config::tests::is_t3_standalone_false_for_full_stack ... ok
+test config::tests::is_t3_standalone_false_no_slm ... ok
+test config::tests::is_t3_standalone_true_for_standalone_combo ... ok
+test ca::tests::postinstall_should_skip_ca_returns_false_when_absent ... ok
+test ca::tests::postinstall_should_skip_ca_returns_true_when_present ... ok
+test config::tests::patch_tier3_standalone_is_allowed ... ok
+test config::tests::patch_same_value_no_changed_keys ... ok
+test config::tests::patch_pii_mode_changes_key ... ok
+test config::tests::patch_port_sets_restart_required ... ok
+test config::tests::test_config_hotreload_off_to_replace ... ok
+test config::tests::patch_tier3_without_tier2_is_error ... ok
+test config::tests::patch_tier2_without_tier1_is_error ... ok
+test config::tests::patch_tier3_with_all_tiers_ok ... ok
+test config::tests::validate_pii_tiers_standalone_accepted ... ok
+test config::tests::validate_pii_tiers_t2_without_t1_still_rejected ... ok
+test config::tests::test_patch_config_ner_flag_persists ... ok
+test dashboard::tests::parse_query_limit_extracts_n ... ok
+test dashboard::tests::parse_query_limit_extra_params_still_works ... ok
+test dashboard::tests::parse_query_limit_missing_limit_key_returns_none ... ok
+test dashboard::tests::parse_query_limit_no_query_string_returns_none ... ok
+test dashboard::tests::parse_query_limit_non_numeric_returns_none ... ok
+test dashboard::tests::ws_event_message_pii_processed_false_appears_in_json ... ok
+test dashboard::tests::ws_event_message_none_optional_fields_absent_from_json ... ok
+test dashboard::tests::ws_event_message_type_tag_is_message ... ok
+test dashboard::tests::ws_event_message_extra_fields_ignored_by_minimal_consumer ... ok
+test dashboard::tests::ws_event_message_with_optional_fields_serialises ... ok
+test models::tests::catalog_ids_match_spec ... ok
+test models::tests::get_api_entries_marks_active_model ... ok
+test extract_tests::test_extract_llama_server_missing_source_errors ... ok
+test models::tests::download_tracker_register_cancel_complete ... ok
+test models::tests::get_api_entries_returns_all_catalog_entries ... ok
+test models::tests::get_api_entries_marks_downloaded_when_file_exists ... ok
+test network_helper::tests::test_build_hosts_entries_no_duplicates ... ok
+test network_helper::tests::test_build_pf_anchor_contains_port ... ok
+test network_helper::tests::test_build_hosts_entries_only_given_domains ... ok
+test network_helper::tests::test_build_hosts_entries_idempotent ... ok
+test network_helper::tests::test_build_pf_anchor_custom_port ... ok
+test network_helper::tests::test_domain_list_change ... ok
+test models::tests::is_downloaded_detects_gguf_and_onnx ... ok
+test network_helper::tests::test_has_privacyclaw_entries_false ... ok
+test network_helper::tests::test_has_privacyclaw_entries_true ... ok
+test network_helper::tests::test_insert_pf_conf_include_no_anchor_line ... ok
+test network_helper::tests::test_pf_conf_include_roundtrip ... ok
+test network_helper::tests::test_insert_pf_conf_include_idempotent ... ok
+test network_helper::tests::test_insert_pf_conf_include_position ... ok
+test extract_tests::test_extract_llama_server_copies_and_skips ... ok
+test network_helper::tests::test_remove_privacyclaw_lines ... ok
+test network_helper::tests::test_pf_conf_insert_remove_roundtrip ... ok
+test parser::anthropic::tests::test_extract_tokens_from_message_delta ... ok
+test parser::anthropic::tests::test_empty_delta_returns_none ... ok
+test parser::anthropic::tests::test_extract_delta_from_content_block_delta ... ok
+test parser::anthropic::tests::test_extract_tokens_from_message_start ... ok
+test parser::anthropic::tests::test_non_delta_event_returns_none ... ok
+test parser::anthropic::tests::test_parse_malformed_json_returns_none ... ok
+test parser::anthropic::tests::test_parse_missing_model_returns_none ... ok
+test parser::anthropic::tests::test_parse_model_and_messages ... ok
+test parser::anthropic::tests::test_parse_image_block_elided ... ok
+test parser::google::tests::test_google_extract_delta_from_candidates ... ok
+test parser::anthropic::tests::test_parse_tool_use_content_array ... ok
+test parser::google::tests::test_google_parse_contents_field ... ok
+test parser::openai::tests::test_openai_done_sentinel_is_none ... ok
+test parser::openai::tests::test_openai_extract_delta_from_choices ... ok
+test parser::openai::tests::test_openai_parse_model_and_messages ... ok
+test parser::sse::tests::test_comment_lines_ignored ... ok
+test parser::sse::tests::test_byte_by_byte_same_as_full_push ... ok
+test parser::sse::tests::test_event_type ... ok
+test parser::sse::tests::test_event_type_without_data_skipped ... ok
+test parser::sse::tests::test_done_sentinel ... ok
+test parser::sse::tests::test_empty_event_skipped ... ok
+test parser::sse::tests::test_lf_only_line_endings ... ok
+test parser::sse::tests::test_message_stop_event_parsed_correctly ... ok
+test parser::sse::tests::test_multi_line_data_concatenated ... ok
+test parser::sse::tests::test_multiple_events ... ok
+test parser::sse::tests::test_partial_chunks ... ok
+test parser::sse::tests::test_simple_event ... ok
+test parser::tests::test_unknown_provider_falls_back_to_openai_format ... ok
+test pid::tests::test_read_pid_absent_returns_none ... ok
+test pid::tests::test_remove_pid_absent_is_noop ... ok
+test pid::tests::test_read_pid_garbage_returns_none ... ok
+test pid::tests::test_pid_file_contains_current_pid ... ok
+test parser::sse::tests::test_1000_events_in_one_push ... ok
+test pid::tests::test_write_read_remove_roundtrip ... ok
+test pii::buffer::tests::test_empty_delta_returns_empty ... ok
+test pii::buffer::tests::test_empty_vault_immediate_flush ... ok
+test pii::buffer::tests::test_accumulation_across_many_chunks ... ok
+test pii::buffer::tests::test_flush_remaining_empty_buffer ... ok
+test pii::buffer::tests::test_holdback_triggered_by_prefix_match ... ok
+test pii::buffer::tests::test_multibyte_char_at_tail_boundary ... ok
+test pii::buffer::tests::test_flush_remaining_at_eos ... ok
+test pii::buffer::tests::test_no_trigger_char_immediate_flush ... ok
+test parser::tests::test_parse_request_scaling_182_turns_under_50ms ... ok
+test pii::buffer::tests::test_single_chunk_replacement ... ok
+test pii::buffer::tests::test_multiple_tokens_in_one_chunk ... ok
+test pii::buffer::tests::test_no_holdback_on_english_prose_with_ipv6_in_vault ... ok
+test pii::synth::tests::test_bearer_token_format ... ok
+test pii::buffer::tests::test_token_at_very_start ... ok
+test pii::synth::tests::test_deterministic_with_same_seed ... ok
+test pii::synth::tests::test_credit_card_luhn_valid ... ok
+test pii::synth::tests::test_different_seeds_produce_different_output ... ok
+test pii::buffer::tests::test_token_split_across_chunks ... ok
+test pii::synth::tests::test_email_format ... ok
+test pii::synth::tests::test_gen_ipv6_length ... ok
+test pii::buffer::tests::test_throughput_1mb_no_pii_under_5ms ... ok
+test pii::synth::tests::test_ipv4_rfc1918_prefix ... ok
+test pii::synth::tests::test_get_or_create_idempotent ... ok
+test pii::synth::tests::test_openai_key_prefix_preserved ... ok
+test pii::synth::tests::test_phone_format ... ok
+test pii::synth::tests::test_ssn_format ... ok
+test pii::synth::tests::test_get_or_create_same_original_different_types ... ok
+test pii::tests::inject_system_instruction_anthropic_no_system_creates_field ... ok
+test pii::tests::inject_system_instruction_anthropic_existing_system_appends ... ok
+test pii::tests::inject_system_instruction_google_noop ... ok
+test pii::tests::inject_system_instruction_openai_existing_system_msg_appends ... ok
+test pii::tests::inject_system_instruction_openai_no_system_msg_inserts_at_index_0 ... ok
+test pii::tests::pii_mode_off_pipeline_not_called ... ok
+test pii::synth::tests::test_gen_ipv6_format_is_valid_ula ... ok
+test pii::buffer::tests::test_ipv6_synthetic_max_key_len_short ... ok
+test pii::tests::test_log_detections_does_not_panic ... ok
+test pii::tests::test_log_detections_empty_spans ... ok
+test pii::tests::test_log_detections_masks_originals ... ok
+test parser::sse::tests::test_1mb_data_line_no_panic ... ok
+test pii::tests::test_merge_spans_both_empty ... ok
+test pii::tests::test_merge_spans_one_empty ... ok
+test pii::tests::test_merge_spans_includes_tier2_person_name ... ok
+test pii::tests::test_merge_spans_partial_overlap_keeps_high_confidence ... ok
+test pii::tests::test_merge_spans_preserves_non_overlapping ... ok
+test pii::tests::test_merge_spans_removes_overlaps ... ok
+test pii::tests::test_merge_spans_three_non_overlapping_sorted ... ok
+test pii::tests::test_pii_mode_default ... ok
+test pii::tests::test_pii_mode_detect_only_serialization ... ok
+test pii::tests::pipeline_full_stack_slm_standalone_false ... ok
+test pii::tests::pipeline_slm_standalone_flag_true_and_tier2_none ... ok
+test pii::tests::test_pii_mode_serde_roundtrip ... ok
+test parser::sse::tests::test_large_stream_throughput ... ok
+test pii::tests::test_process_request_body_google_format ... ok
+test pii::tests::test_process_request_body_invalid_json ... ok
+test pii::tests::test_process_request_body_no_messages_field ... ok
+test pii::tests::pii_mode_detect_only_body_unchanged ... ok
+test pii::tests::test_process_request_body_anthropic_multipart ... ok
+test pii::tests::test_pii_mode_off_body_with_no_pii_returns_none ... ok
+test pii::tests::test_process_request_body_openai_no_pii ... ok
+test pii::tests::test_process_request_body_openai_multiple_messages ... ok
+test pii::tests::test_rebuild_request_lowercase_content_length ... ok
+test pii::tests::test_rebuild_request_no_content_length_header ... ok
+test pii::tests::test_rebuild_request_preserves_other_headers ... ok
+test pii::tests::test_rebuild_request_updates_content_length ... ok
+test pii::tests::test_slm_disabled_when_tiers_slm_false ... ok
+test pii::tests::pii_mode_replace_modifies_body ... ok
+test pii::tests::test_tier2_disabled_returns_only_tier1 ... ok
+test pii::tests::test_process_request_body_openai_system_message ... ok
+test pii::tests::test_pii_mode_replace_vault_populated ... ok
+test pii::tests::test_tier2_absent_when_ner_disabled_no_panic ... ok
+test pii::tests::test_process_request_body_openai_multiple_pii_types ... ok
+test pii::tests::test_process_request_body_openai_with_email ... ok
+test pii::tier1::tests::test_aws_access_key_detected ... ok
+test pii::tier1::tests::test_bearer_token_detected ... ok
+test pii::tier1::tests::test_aadhaar_not_detected_without_spaces ... ok
+test pii::tier1::tests::test_aadhaar_detected ... ok
+test pii::tier1::tests::test_cpf_valid_fn ... ok
+test pii::tier1::tests::test_credit_card_luhn_invalid ... ok
+test pii::tier1::tests::test_credit_card_luhn_valid ... ok
+test pii::tier1::tests::test_cnpj_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_credit_card_no_luhn_invalid_rejected ... ok
+test pii::tier1::tests::test_cnpj_detected ... ok
+test pii::tier1::tests::test_cpf_invalid_check_digit_rejected ... ok
+test pii::tier1::tests::test_db_connection_detected ... ok
+test pii::tier1::tests::test_email_detected ... ok
+test pii::tier1::tests::test_de_steuer_id_rejected_zero_start ... ok
+test pii::tier1::tests::test_cpf_all_same_rejected ... ok
+test pii::tier1::tests::test_detect_in_json_messages_returns_message_index ... ok
+test pii::tier1::tests::test_cpf_valid_detected ... ok
+test pii::tier1::tests::test_fr_insee_detected ... ok
+test pii::tier1::tests::test_github_pat_detected ... ok
+test pii::tier1::tests::test_fr_insee_rejected_wrong_start ... ok
+test pii::tier1::tests::test_ipv4_not_false_positive_version ... ok
+test pii::tier1::tests::test_de_steuer_id_detected ... ok
+test pii::tier1::tests::test_ipv4_detected ... ok
+test pii::tier1::tests::test_ipv6_detected ... ok
+test pii::tier1::tests::test_ipv6_no_false_positive_double_colon_only ... ok
+test pii::tier1::tests::test_ipv6_no_false_positive_rust_path ... ok
+test pii::tier1::tests::test_ipv6_abbreviated_detected ... ok
+test pii::tier1::tests::test_in_pan_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_in_pan_detected ... ok
+test pii::tier1::tests::test_luhn_valid ... ok
+test pii::tier1::tests::test_no_false_positive_on_git_sha ... ok
+test pii::tier1::tests::test_no_pii_text ... ok
+test pii::tier1::tests::test_multiple_pii_in_text ... ok
+test pii::tier1::tests::test_openai_key_no_false_positive_short ... ok
+test pii::tier1::tests::test_openai_key_detected ... ok
+test pii::tier1::tests::test_phone_detected_us_format ... ok
+test pii::tier1::tests::test_replace_in_text ... ok
+test pii::tier1::tests::test_phone_not_false_positive ... ok
+test pii::tier1::tests::test_ko_brn_not_detected_wrong_format ... ok
+test pii::tier1::tests::test_ko_rrn_rejected_invalid_gender_digit ... ok
+test pii::tier1::tests::test_replace_in_text_multiple_types ... ok
+test pii::tier1::tests::test_ssh_private_key_detected ... ok
+test pii::tier1::tests::test_ssn_666_prefix_rejected ... ok
+test pii::tier1::tests::test_spans_are_non_overlapping ... ok
+test pii::tier1::tests::test_ssn_9xx_prefix_rejected ... ok
+test pii::tier1::tests::test_ssn_detected ... ok
+test pii::tier1::tests::test_ssn_invalid_prefix_not_detected ... ok
+test pii::tier1::tests::test_ssn_space_separator ... ok
+test pii::tier1::tests::test_ko_brn_detected ... ok
+test pii::tier1::tests::test_tier1_email_detection ... ok
+test pii::tier1::tests::test_ko_rrn_detected ... ok
+test pii::tier1::tests::test_tier1_no_false_positives ... ok
+test pii::tier1::tests::test_tier1_disabled_returns_no_spans ... ok
+test pii::tier1::tests::test_tier1_ssn_detection ... ok
+test pii::tier1::tests::test_uk_nin_not_detected_in_en_us ... ok
+test pii::tier2::tests::test_load_nonexistent_model_returns_error ... ok
+test pii::tier2::tests::test_multibyte_utf8_offsets ... ok
+test pii::tier2::tests::test_num_labels_cap_uses_d3_not_d1 ... ok
+test pii::tier2::tests::test_text_starts_at_byte_offset ... ok
+test pii::tier2::tests::test_token_exceeding_text_length_is_skipped ... ok
+test pii::tier2::tests::test_token_in_label_prefix_is_skipped ... ok
+test pii::tier1::tests::test_tier1_bearer_token_detection ... ok
+test pii::tier2::tests::test_token_in_text_maps_correctly ... ok
+test pii::tier2::tests::test_token_straddling_boundary_is_skipped ... ok
+test pii::tier2::tests::test_zero_length_span_is_skipped ... ok
+test pii::tier1::tests::test_url_with_creds_detected ... ok
+test pii::tier1::tests::test_uk_nin_detected ... ok
+test pii::tier3::tests::detect_and_rewrite_timeout_returns_none ... ok
+test pii::tier3::tests::extract_pairs_alignment_failure_skips_token ... ok
+test pii::tier3::tests::extract_pairs_ambiguous_boundary_first_consumes_to_next_marker ... ok
+test pii::tier3::tests::extract_pairs_majority_failure_returns_partial_and_warns ... ok
+test pii::tier3::tests::extract_pairs_no_markers_returns_empty ... ok
+test pii::tier3::tests::extract_pairs_passthrough_text_advances_correctly ... ok
+test pii::tier3::tests::extract_pairs_single_span_email ... ok
+test pii::tier3::tests::extract_pairs_two_spans_order_preserved ... ok
+test pii::tier3::tests::extract_pairs_unclosed_marker_at_eos_skips ... ok
+test pii::tier3::tests::sidecar_start_args_do_not_include_n_predict ... ok
+test pii::tier3::tests::test_build_prompt_contains_span_info ... ok
+test pii::tier3::tests::test_build_prompt_includes_all_indices ... ok
+test pii::tier3::tests::test_disambiguate_empty_candidates ... ok
+test pii::tier3::tests::detect_and_rewrite_no_section_sign_returns_none ... ok
+test pii::tier3::tests::detect_and_rewrite_parses_well_formed_response ... ok
+test pii::tier3::tests::detect_and_rewrite_http_500_returns_none ... ok
+test pii::tier3::tests::test_sidecar_start_missing_binary_fails ... ok
+test pii::tier3::tests::test_disambiguate_timeout_returns_candidates_unchanged ... ok
+test pii::tier3::tests::detect_and_rewrite_sends_correct_max_tokens_and_system_prompt ... ok
+test pii::tier3::tests::test_slm_sidecar_constructor ... ok
+test pii::tier3::tests::test_tier3_disabled_slm_field_is_none ... ok
+test pii::tier3::tests::test_tier3_tiers_slm_false_no_sidecar ... ok
+test pii::tier3::tests::test_slm_sidecar_trims_trailing_slash ... ok
+test pii::vault::tests::from_records_restores_confidence ... ok
+test pii::tier3::tests::test_tier3_timeout_returns_candidates_unchanged ... ok
+test pii::vault::tests::from_records_zero_confidence_preserved ... ok
+/bin/sh: --model: invalid option
+Usage:	/bin/sh [GNU long option] [option] ...
+	/bin/sh [GNU long option] [option] script-file ...
+GNU long options:
+	--debug
+	--debugger
+	--dump-po-strings
+	--dump-strings
+	--help
+	--init-file
+	--login
+	--noediting
+	--noprofile
+	--norc
+	--posix
+	--protected
+	--rcfile
+	--restricted
+	--verbose
+	--version
+	--wordexp
+Shell options:
+	-irsD or -c command or -O shopt_option		(invocation only)
+	-abefhkmnptuvxBCHP or -o option
+test pii::vault::tests::idempotent_add_does_not_duplicate_confidence_entry ... ok
+test pii::vault::tests::quints_empty_vault_returns_empty_iterator ... ok
+test pii::vault::tests::quints_returns_correct_five_tuples ... ok
+test pii::vault::tests::test_add_and_get_mapping ... ok
+test pii::vault::tests::test_deterministic_rng_different_conv_ids ... ok
+test pii::vault::tests::test_deterministic_seed ... ok
+test pii::vault::tests::test_empty_vault_replace ... ok
+test pii::vault::tests::test_full_round_trip_forward_and_back ... ok
+test pii::vault::tests::test_idempotent_add ... ok
+test pii::tier3::tests::test_disambiguate_mock_server_confirms_subset ... ok
+test pii::vault::tests::quints_count_equals_mapping_count ... ok
+test pii::vault::tests::test_registry_creates_distinct_vaults ... ok
+test pii::vault::tests::test_mapping_count ... ok
+test pii::vault::tests::test_pairs_iter ... ok
+test pii::vault::tests::test_replace_originals_basic ... ok
+test pii::vault::tests::test_replace_originals_empty_vault ... ok
+test pii::vault::tests::test_registry_get_or_create_idempotent ... ok
+test pii::vault::tests::test_replace_synthetics_longest_match ... ok
+test pii::vault::tests::test_replace_synthetics_no_match ... ok
+test pii::vault::tests::test_replace_synthetics_multiple_matches ... ok
+test pii::vault::tests::test_replace_originals_multiple_mappings ... ok
+test pii::vault::tests::test_replace_synthetics_round_trip ... ok
+test pii::vault::tests::test_replace_synthetics_partial_overlap ... ok
+test pii::vault::tests::test_synthetic_key_prefixes ... ok
+test pii::vault::tests::test_vault_from_records ... ok
+test pii::vault::tests::test_synthetic_key_prefixes_mixed_types ... ok
+test pii::vault::tests::test_vault_to_records ... ok
+test proxy::intercept::tests::entity_type_label_already_uppercased ... ok
+test proxy::intercept::tests::entity_type_label_empty_string_does_not_panic ... ok
+test proxy::intercept::tests::entity_type_label_lowercased_email ... ok
+test proxy::intercept::tests::entity_type_label_mixed_case ... ok
+test proxy::intercept::tests::entity_type_label_unicode_uppercased ... ok
+test proxy::intercept::tests::detection_records_stored_with_correct_message_id ... ok
+test proxy::intercept::tests::phase_a_different_body_different_conv_id ... ok
+test proxy::intercept::tests::phase_a_returns_same_conv_id_for_same_fingerprint ... ok
+test proxy::intercept::tests::phase_b_content_masked_none_when_passthrough ... ok
+test proxy::intercept::tests::phase_b_stores_content_masked_when_pii_active ... ok
+test pii::tier3::tests::test_slm_http_500_returns_candidates_unchanged ... ok
+test pii::tests::test_pipeline_process_request_182_turns_under_100ms ... ok
+test proxy::intercept::tests::test_anthropic_message_stop_terminates_stream ... ok
+test proxy::intercept::tests::test_concurrent_same_fingerprint ... ok
+test proxy::intercept::tests::test_content_length_correct_after_replacement ... ok
+test proxy::intercept::tests::test_conversation_start_ws_event_for_new_conv ... ok
+test proxy::intercept::tests::test_large_request_response_forwarded_verbatim ... ok
+test proxy::intercept::tests::test_new_conversation_created_on_first_request ... ok
+test proxy::intercept::tests::test_new_messages_only_stored_on_continuation ... ok
+test proxy::intercept::tests::test_openai_done_sentinel_terminates_stream ... ok
+test pii::tier1::tests::test_tier1_10kb_under_5ms ... ok
+test proxy::intercept::tests::test_per_request_state_reset ... ok
+test proxy::intercept::tests::test_pii_detected_ws_event_fired ... ok
+test proxy::intercept::tests::test_pii_mode_detect_only_body_unchanged ... ok
+test proxy::intercept::tests::test_pii_mode_off_proxy_byte_identical ... ok
+test proxy::intercept::tests::test_pii_request_sanitised_before_upstream ... ok
+test proxy::intercept::tests::test_pii_sse_response_reversed_to_client ... ok
+test proxy::intercept::tests::test_proxy_does_not_modify_request_bytes ... ok
+test proxy::intercept::tests::test_proxy_does_not_modify_response_bytes ... ok
+test proxy::intercept::tests::test_response_complete_ws_event_fired ... ok
+test proxy::intercept::tests::test_response_stored_after_sse_complete ... ok
+test proxy::intercept::tests::test_small_request_response_forwarded_verbatim ... ok
+test proxy::intercept::tests::test_ten_turns_on_one_connection ... ok
+test proxy::intercept::tests::test_tokens_extracted_and_stored ... ok
+test proxy::intercept::tests::test_sse_split_across_tiny_chunks ... ok
+test pii::vault::tests::test_vault_registry_ttl_eviction ... ok
+test proxy::intercept::tests::test_two_concurrent_sessions_dont_interfere ... ok
+test proxy::intercept::tests::test_twenty_concurrent_sessions ... ok
+test proxy::intercept::tests::test_two_turns_on_one_connection ... ok
+test proxy::intercept::tests::test_upstream_death_sends_tls_close_notify_equivalent ... ok
+test proxy::intercept::tests::test_upstream_eof_mid_sse_finalizes_partial ... ok
+test proxy::intercept::tests::test_upstream_eof_signals_passthrough_c2u_to_exit ... ok
+test proxy::intercept::tests::test_upstream_idle_timeout_fires ... ok
+test proxy::intercept::tests::test_upstream_eof_signals_pii_c2u_to_exit ... ok
+test proxy::intercept::tests::test_upstream_immediate_eof_no_panic ... ok
+test proxy::network::tests::test_dns_query_packet_format ... ok
+test proxy::network::tests::test_intercept_decision_known_hosts ... ok
+test proxy::network::tests::test_intercept_decision_unknown_host ... ok
+test proxy::network::tests::test_peek_sni_extracts_hostname ... ok
+test proxy::network::tests::test_peek_sni_returns_none_for_garbage ... ok
+test proxy::network::tests::test_peek_sni_returns_none_for_truncated_buffer ... ok
+test storage::tests::insert_and_load_detections_filtered ... ok
+test storage::tests::insert_and_load_detections_unfiltered ... ok
+test storage::tests::load_detections_empty_file_returns_empty_vec ... ok
+test storage::tests::load_detections_filter_no_match_returns_empty ... ok
+test storage::tests::message_all_pii_fields_none_json_omits_them ... ok
+test storage::tests::message_legacy_json_without_new_fields_deserialises_as_none ... ok
+test storage::tests::message_pii_processed_false_serialises ... ok
+test storage::tests::message_with_pii_fields_round_trips ... ok
+test storage::tests::stored_vault_record_legacy_json_missing_confidence_and_tier_is_none ... ok
+test storage::tests::stored_vault_record_none_fields_omitted_from_json ... ok
+test storage::tests::stored_vault_record_with_confidence_round_trips ... ok
+test storage::tests::test_batch_insert_missing_conv_is_noop ... ok
+test storage::tests::test_batch_insert_preserves_order ... ok
+test storage::tests::test_concurrent_batch_inserts_no_corruption ... ok
+test storage::tests::test_count_request_messages_counts_only_requests ... ok
+test storage::tests::test_different_provider_same_fingerprint_separate ... ok
+test storage::tests::test_insert_and_get_conversation ... ok
+test storage::tests::test_insert_and_get_messages_in_order ... ok
+test proxy::intercept::tests::test_ws_text_delta_events_fired ... ok
+test storage::tests::test_load_vault_no_vault_line ... ok
+test storage::tests::test_load_vault_nonexistent_conv ... ok
+test storage::tests::test_malformed_message_line_skipped ... ok
+test storage::tests::test_same_fingerprint_same_conv ... ok
+test storage::tests::test_save_and_load_vault_basic ... ok
+test storage::tests::test_save_vault_empty_records ... ok
+test storage::tests::test_save_vault_multiple_records ... ok
+test storage::tests::test_save_vault_overwrites_existing ... ok
+test storage::tests::test_unknown_fingerprint_returns_none ... ok
+test storage::tests::test_write_lock_serializes_appends ... ok
+test uninstall::tests::test_has_failures_detects_failed_step ... ok
+test uninstall::tests::test_has_failures_no_failures ... ok
+test uninstall::tests::test_outcome_symbols ... ok
+test uninstall::tests::test_purge_flag_controls_data_step ... ok
+test uninstall::tests::test_skipped_symbol ... ok
+test uninstall::tests::test_step_stop_no_pid_skipped ... ok
+test util::tests::test_authorization_header_redacted ... ok
+test util::tests::test_fmt_chunk_hex_empty_input ... ok
+test util::tests::test_fmt_chunk_hex_short_input_not_truncated ... ok
+test util::tests::test_fmt_chunk_hex_truncates_at_256_bytes ... ok
+test util::tests::test_other_headers_not_redacted ... ok
+test util::tests::test_x_api_key_header_redacted ... ok
+test version::tests::test_version_string_format ... ok
+test storage::tests::test_list_conversations_newest_first ... ok
+test proxy::intercept::tests::test_sse_accumulation_buffer_cap ... ok
+test proxy::intercept::tests::test_upstream_gone_flag_prevents_write_in_passthrough ... ok
+test proxy::intercept::tests::test_client_disconnect_mid_response_still_stores ... ok
+test proxy::intercept::tests::test_unparseable_request_no_storage_no_panic ... ok
+kill: '75983': No such process
+test pid::tests::test_stop_process_terminates_sleeping_child ... ok
+test pii::tier3::tests::test_sidecar_drop_does_not_panic ... ok
+
+test result: ok. 374 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 31.43s
+
+     Running tests/brew_formula_test.rs (target/debug/deps/brew_formula_test-cf62459db060df23)
+
+running 2 tests
+test formula_privacyclaw_rb_exists_and_valid ... FAILED
+test cask_privacyclaw_app_rb_exists_and_valid ... FAILED
+
+failures:
+
+---- formula_privacyclaw_rb_exists_and_valid stdout ----
+
+thread 'formula_privacyclaw_rb_exists_and_valid' panicked at tests/brew_formula_test.rs:19:5:
+Formula/privacyclaw.rb must exist at "/Users/constantine/github/kurianoff/homebrew-privacyclaw/Formula/privacyclaw.rb"
+
+---- cask_privacyclaw_app_rb_exists_and_valid stdout ----
+
+thread 'cask_privacyclaw_app_rb_exists_and_valid' panicked at tests/brew_formula_test.rs:35:5:
+Casks/privacyclaw-app.rb must exist at "/Users/constantine/github/kurianoff/homebrew-privacyclaw/Casks/privacyclaw-app.rb"
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    cask_privacyclaw_app_rb_exists_and_valid
+    formula_privacyclaw_rb_exists_and_valid
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test brew_formula_test`

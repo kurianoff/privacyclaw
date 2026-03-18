@@ -242,6 +242,26 @@ async fn dispatch(
     }
 }
 
+/// Write a standard HTTP response with CORS headers.
+/// Content-Type is set to `content_type`; body length is derived automatically.
+/// The PATCH /api/config path and WebSocket upgrade path deviate from this pattern
+/// and are not handled here.
+async fn send_response(
+    stream: &mut TcpStream,
+    status: u16,
+    content_type: &str,
+    body: &[u8],
+) -> Result<()> {
+    let header = format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
+         Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
+        body.len()
+    );
+    stream.write_all(header.as_bytes()).await?;
+    stream.write_all(body).await?;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn handle_http(
     mut stream: TcpStream,
@@ -329,13 +349,7 @@ async fn handle_http(
             "http_proxy": cfg.proxy.listen,
             "network_proxy": cfg.network_proxy.listen,
         })).unwrap_or_default();
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&body).await?;
+        send_response(&mut stream, 200, "application/json", &body).await?;
         return Ok(());
     }
 
@@ -354,14 +368,7 @@ async fn handle_http(
             pii_mode: cfg_mgr.get().await.pii.mode.clone(),
         };
         let _ = ws_tx.send(event);
-        let body = b"{\"ok\":true}";
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(body).await?;
+        send_response(&mut stream, 200, "application/json", b"{\"ok\":true}").await?;
         return Ok(());
     }
 
@@ -375,14 +382,7 @@ async fn handle_http(
         let _ = ws_tx.send(event);
         proxy_state.shutdown.notify_one();
         crate::pid::remove_pid();
-        let body = b"{\"ok\":true}";
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(body).await?;
+        send_response(&mut stream, 200, "application/json", b"{\"ok\":true}").await?;
         return Ok(());
     }
 
@@ -396,13 +396,7 @@ async fn handle_http(
             Some(&download_tracker),
         );
         let body = serde_json::to_vec(&entries).unwrap_or_default();
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&body).await?;
+        send_response(&mut stream, 200, "application/json", &body).await?;
         return Ok(());
     }
 
@@ -419,26 +413,14 @@ async fn handle_http(
                 let body = serde_json::to_vec(&serde_json::json!({
                     "ok": false, "error": "already downloaded"
                 })).unwrap_or_default();
-                let header = format!(
-                    "HTTP/1.1 409\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                     Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(header.as_bytes()).await?;
-                stream.write_all(&body).await?;
+                send_response(&mut stream, 409, "application/json", &body).await?;
                 return Ok(());
             }
             if download_tracker.is_downloading(&model_id) {
                 let body = serde_json::to_vec(&serde_json::json!({
                     "ok": false, "error": "download already in progress"
                 })).unwrap_or_default();
-                let header = format!(
-                    "HTTP/1.1 409\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                     Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(header.as_bytes()).await?;
-                stream.write_all(&body).await?;
+                send_response(&mut stream, 409, "application/json", &body).await?;
                 return Ok(());
             }
             crate::models::start_background_download(
@@ -448,26 +430,12 @@ async fn handle_http(
                 dl_progress_tx,
                 dl_error_tx,
             );
-            let body = b"{\"ok\":true,\"status\":\"downloading\"}";
-            let header = format!(
-                "HTTP/1.1 202\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                 Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(header.as_bytes()).await?;
-            stream.write_all(body).await?;
+            send_response(&mut stream, 202, "application/json", b"{\"ok\":true,\"status\":\"downloading\"}").await?;
             return Ok(());
         }
         if method == "DELETE" {
             download_tracker.cancel(&model_id);
-            let body = b"{\"ok\":true}";
-            let header = format!(
-                "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                 Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(header.as_bytes()).await?;
-            stream.write_all(body).await?;
+            send_response(&mut stream, 200, "application/json", b"{\"ok\":true}").await?;
             return Ok(());
         }
     }
@@ -482,14 +450,7 @@ async fn handle_http(
         if (cfg_mgr.patch(patch).await).is_ok() {
             let _ = cfg_mgr.save_to_disk().await;
         }
-        let body = b"{\"ok\":true}";
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(body).await?;
+        send_response(&mut stream, 200, "application/json", b"{\"ok\":true}").await?;
         return Ok(());
     }
 
@@ -505,13 +466,7 @@ async fn handle_http(
                 let body = serde_json::to_vec(&serde_json::json!({
                     "ok": false, "error": "model not downloaded"
                 })).unwrap_or_default();
-                let header = format!(
-                    "HTTP/1.1 409\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                     Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(header.as_bytes()).await?;
-                stream.write_all(&body).await?;
+                send_response(&mut stream, 409, "application/json", &body).await?;
                 return Ok(());
             }
             // §5.6: Stop any existing sidecar and start a new one for this model.
@@ -538,13 +493,7 @@ async fn handle_http(
                 let _ = cfg_mgr.save_to_disk().await;
             }
             let body = serde_json::to_vec(&serde_json::json!({ "ok": true })).unwrap_or_default();
-            let header = format!(
-                "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                 Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(header.as_bytes()).await?;
-            stream.write_all(&body).await?;
+            send_response(&mut stream, 200, "application/json", &body).await?;
             return Ok(());
         }
     }
@@ -563,13 +512,7 @@ async fn handle_http(
             let body = serde_json::to_vec(&serde_json::json!({
                 "ok": false, "error": "deactivate model before deleting"
             })).unwrap_or_default();
-            let header = format!(
-                "HTTP/1.1 409\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-                 Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-                body.len()
-            );
-            stream.write_all(header.as_bytes()).await?;
-            stream.write_all(&body).await?;
+            send_response(&mut stream, 409, "application/json", &body).await?;
             return Ok(());
         }
         let models_dir = cfg.resolved_models_dir();
@@ -582,13 +525,7 @@ async fn handle_http(
         .filter(|p| p.exists())
         .any(|p| std::fs::remove_file(p).is_ok());
         let body = serde_json::to_vec(&serde_json::json!({ "ok": deleted })).unwrap_or_default();
-        let header = format!(
-            "HTTP/1.1 200\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-             Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-            body.len()
-        );
-        stream.write_all(header.as_bytes()).await?;
-        stream.write_all(&body).await?;
+        send_response(&mut stream, 200, "application/json", &body).await?;
         return Ok(());
     }
 
@@ -604,8 +541,7 @@ async fn handle_http(
         }
         p if p.starts_with("/api/conversations/") => {
             let id = p.trim_start_matches("/api/conversations/");
-            let convs = store.list_conversations(50).unwrap_or_default();
-            let conv = convs.into_iter().find(|c| c.id == id);
+            let conv = store.get_conversation_by_id(id);
             let msgs = store.get_messages(id).unwrap_or_default();
             let json = serde_json::to_vec(&serde_json::json!({
                 "conversation": conv,
@@ -633,13 +569,7 @@ async fn handle_http(
     };
 
     tracing::info!(path = %path, status, body_bytes = body.len(), "dashboard: HTTP response");
-    let header = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n\
-         Access-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    stream.write_all(header.as_bytes()).await?;
-    stream.write_all(&body).await?;
+    send_response(&mut stream, status, content_type, &body).await?;
     Ok(())
 }
 

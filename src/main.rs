@@ -28,6 +28,71 @@ use std::time::Duration;
 
 const VAULT_EVICT_INTERVAL: Duration = Duration::from_secs(60);
 
+// ── Shared proxy-resource bootstrap ───────────────────────────────────────────
+
+/// Resources shared between `run_tray_mode` and `cmd_start`.
+///
+/// Holds everything that is created identically in both paths: CA bundle,
+/// certificate cache, store, PII context, WebSocket channel, and the log
+/// guards that must stay alive for the process lifetime.
+#[cfg_attr(not(all(target_os = "macos", feature = "tray")), allow(dead_code))]
+pub(crate) struct ProxyResources {
+    pub cert_cache:   ca::cert_gen::CertCache,
+    pub store:        storage::Store,
+    pub pii:          PiiCtx,
+    pub ws_tx:        broadcast::Sender<dashboard::WsEvent>,
+    pub _log_guards:  Vec<tracing_appender::non_blocking::WorkerGuard>,
+}
+
+/// Load proxy resources shared by both the tray and CLI start paths.
+///
+/// Performs: config log-file override, logging init, version WARN, CA load,
+/// store open, cert cache init, PII context build, and ws_tx channel creation.
+/// Returns `ProxyResources`; caller constructs `ConfigManager` (needs `config_path`).
+#[cfg_attr(not(all(target_os = "macos", feature = "tray")), allow(dead_code))]
+pub(crate) fn load_proxy_resources(
+    cfg: &mut Config,
+    log_file: Option<&str>,
+    pii_flag: bool,
+    tray_mode: bool,
+) -> Result<ProxyResources> {
+    if let Some(path) = log_file {
+        cfg.logging.file = if path.is_empty() { None } else { Some(path.to_string()) };
+    }
+
+    let log_guards = init_logging(&cfg.logging);
+
+    tracing::warn!(
+        version = version::VERSION,
+        git_hash = version::GIT_HASH,
+        build_date = version::BUILD_DATE,
+        tray = tray_mode,
+        "privacyclaw starting"
+    );
+
+    let ca_dir = default_ca_dir();
+    let bundle = ca::load_ca(&ca_dir)?
+        .context("CA not initialized. Run `privacyclaw init` first.")?;
+
+    let store = storage::Store::open(&cfg.resolved_logs_dir())
+        .with_context(|| format!("Failed to open log dir: {:?}", cfg.resolved_logs_dir()))?;
+    tracing::info!(logs_dir = %cfg.resolved_logs_dir().display(), "store opened");
+
+    let cert_cache = ca::cert_gen::CertCache::new(bundle);
+    tracing::info!("cert cache initialised");
+
+    let pii = build_pii_ctx(cfg, pii_flag);
+    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
+
+    Ok(ProxyResources {
+        cert_cache,
+        store,
+        pii,
+        ws_tx,
+        _log_guards: log_guards,
+    })
+}
+
 /// Build a `PiiCtx` from config and CLI flag, or return `None` when PII is off.
 fn build_pii_ctx(cfg: &Config, pii_flag: bool) -> PiiCtx {
     let pii_mode = if pii_flag || cfg.pii.mode == "replace" {
@@ -290,32 +355,19 @@ async fn async_main(cli: Cli) -> Result<()> {
 fn run_tray_mode(cli: Cli) -> Result<()> {
     let mut cfg = Config::load(cli.config.as_deref()).context("Failed to load config")?;
 
-    if let Some(ref path) = cli.log_file {
-        cfg.logging.file = if path.is_empty() { None } else { Some(path.clone()) };
-    }
-
-    let _guards = init_logging(&cfg.logging);
-
-    tracing::warn!(
-        version = version::VERSION,
-        git_hash = version::GIT_HASH,
-        build_date = version::BUILD_DATE,
-        "privacyclaw starting (tray mode)"
-    );
+    let pii_flag = match &cli.command {
+        Commands::Start { pii, .. } => *pii,
+        _ => unreachable!(),
+    };
 
     let config_path = cli.config
         .as_deref()
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let pii_flag = match &cli.command {
-        Commands::Start { pii, .. } => *pii,
-        _ => unreachable!(),
-    };
+    let resources = load_proxy_resources(&mut cfg, cli.log_file.as_deref(), pii_flag, true)?;
 
     let dashboard_url = format!("http://{}", cfg.proxy.dashboard);
-
-    // Shared shutdown: tray Quit → notified → any listener on this Notify.
     let shutdown = Arc::new(Notify::new());
 
     let rt = tokio::runtime::Builder::new_multi_thread()
@@ -323,20 +375,6 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .build()
         .context("failed to build tokio runtime")?;
 
-    // ── Setup: load CA, open store, build caches ────────────────────────────
-    let ca_dir  = default_ca_dir();
-    let bundle  = ca::load_ca(&ca_dir)?
-        .context("CA not initialized. Run `privacyclaw init` first.")?;
-    let store   = storage::Store::open(&cfg.resolved_logs_dir())
-        .with_context(|| format!("Failed to open log dir: {:?}", cfg.resolved_logs_dir()))?;
-    tracing::info!(logs_dir = %cfg.resolved_logs_dir().display(), "store opened");
-
-    let cert_cache = ca::cert_gen::CertCache::new(bundle);
-    tracing::info!("cert cache initialised");
-
-    let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
-
-    let (ws_tx, _) = broadcast::channel::<dashboard::WsEvent>(1024);
     let cfg = Arc::new(cfg);
     let cfg_mgr = ConfigManager::new((*cfg).clone(), Some(config_path));
 
@@ -346,8 +384,8 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         let proxy_state = dashboard::ProxyState::new();
         let download_tracker = crate::models::DownloadTracker::new();
         let (s, w, m, ps, dt) = (
-            store.clone(),
-            ws_tx.clone(),
+            resources.store.clone(),
+            resources.ws_tx.clone(),
             cfg_mgr.clone(),
             proxy_state,
             download_tracker,
@@ -360,23 +398,19 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         tracing::warn!(addr = %cfg.proxy.dashboard, "dashboard started (permanent)");
     }
 
-    if let Some(ref p) = pii {
+    if let Some(ref p) = resources.pii {
         let registry = Arc::clone(&p.registry);
         rt.spawn(async move {
             let mut interval = tokio::time::interval(VAULT_EVICT_INTERVAL);
-            loop {
-                interval.tick().await;
-                registry.evict_expired();
-            }
+            loop { interval.tick().await; registry.evict_expired(); }
         });
     }
 
     {
-        let s = store.clone();
+        let s = resources.store.clone();
         rt.spawn(rotation_loop(s));
     }
 
-    // Write PID file now that permanent tasks are running.
     if let Err(e) = pid::write_pid() {
         tracing::warn!(err = %e, "failed to write PID file");
     }
@@ -387,12 +421,12 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         http_listener_on: false,
         http_task:        None,
         net_task:         None,
-        cert_cache,
+        cert_cache: resources.cert_cache,
         cfg,
         cfg_mgr,
-        store,
-        ws_tx,
-        pii,
+        store:  resources.store,
+        ws_tx:  resources.ws_tx,
+        pii:    resources.pii,
         rt: rt.handle().clone(),
     };
 
@@ -883,140 +917,6 @@ async fn cmd_stop() -> Result<()> {
     }
 }
 
-/// Set NODE_EXTRA_CA_CERTS in the current launchd session and persist it via a
-/// LaunchAgent plist so GUI apps (VSCode / Electron) inherit it across reboots.
-#[cfg(target_os = "macos")]
-pub(crate) fn launchctl_set_node_ca(ca_pem: &std::path::Path) {
-    let ca_str = ca_pem.display().to_string();
-
-    // Set for the current session.
-    match std::process::Command::new("launchctl")
-        .args(["setenv", "NODE_EXTRA_CA_CERTS", &ca_str])
-        .status()
-    {
-        Ok(s) if s.success() => {
-            tracing::info!(ca = %ca_str, "launchctl setenv NODE_EXTRA_CA_CERTS ok");
-        }
-        Ok(s) => tracing::warn!(status = %s, "launchctl setenv NODE_EXTRA_CA_CERTS failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl setenv NODE_EXTRA_CA_CERTS error"),
-    }
-
-    // Write the LaunchAgent plist.
-    let plist_path = match dirs::home_dir() {
-        Some(h) => h.join("Library/LaunchAgents/com.privacyclaw.env.plist"),
-        None => {
-            tracing::warn!("cannot determine home dir; skipping LaunchAgent plist");
-            return;
-        }
-    };
-    let plist_content = format!(
-        r#"<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.privacyclaw.env</string>
-  <key>ProgramArguments</key>
-  <array>
-    <string>/bin/launchctl</string>
-    <string>setenv</string>
-    <string>NODE_EXTRA_CA_CERTS</string>
-    <string>{ca}</string>
-  </array>
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-"#,
-        ca = ca_str
-    );
-
-    if let Some(parent) = plist_path.parent() {
-        if let Err(e) = std::fs::create_dir_all(parent) {
-            tracing::warn!(err = %e, "failed to create LaunchAgents dir");
-            return;
-        }
-    }
-
-    if let Err(e) = std::fs::write(&plist_path, &plist_content) {
-        tracing::warn!(err = %e, path = %plist_path.display(), "failed to write LaunchAgent plist");
-        return;
-    }
-    tracing::info!(path = %plist_path.display(), "LaunchAgent plist written");
-
-    // Load the plist (non-fatal on failure).
-    match std::process::Command::new("launchctl")
-        .args(["load", &plist_path.display().to_string()])
-        .status()
-    {
-        Ok(s) if s.success() => {
-            tracing::info!(path = %plist_path.display(), "LaunchAgent plist loaded");
-        }
-        Ok(s) => tracing::warn!(status = %s, path = %plist_path.display(), "launchctl load plist failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl load plist error"),
-    }
-}
-
-/// Undo NODE_EXTRA_CA_CERTS: unset from current session and remove the LaunchAgent plist.
-#[cfg(target_os = "macos")]
-pub(crate) fn launchctl_unset_node_ca() {
-    match std::process::Command::new("launchctl")
-        .args(["unsetenv", "NODE_EXTRA_CA_CERTS"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("launchctl unsetenv NODE_EXTRA_CA_CERTS ok"),
-        Ok(s) => tracing::warn!(status = %s, "launchctl unsetenv NODE_EXTRA_CA_CERTS failed"),
-        Err(e) => tracing::warn!(err = %e, "launchctl unsetenv NODE_EXTRA_CA_CERTS error"),
-    }
-
-    let plist_path = match dirs::home_dir() {
-        Some(h) => h.join("Library/LaunchAgents/com.privacyclaw.env.plist"),
-        None => {
-            tracing::warn!("cannot determine home dir; skipping LaunchAgent plist removal");
-            return;
-        }
-    };
-
-    if plist_path.exists() {
-        match std::process::Command::new("launchctl")
-            .args(["unload", &plist_path.display().to_string()])
-            .status()
-        {
-            Ok(s) if s.success() => tracing::info!(path = %plist_path.display(), "LaunchAgent plist unloaded"),
-            Ok(s) => tracing::warn!(status = %s, path = %plist_path.display(), "launchctl unload plist failed"),
-            Err(e) => tracing::warn!(err = %e, "launchctl unload plist error"),
-        }
-
-        if let Err(e) = std::fs::remove_file(&plist_path) {
-            tracing::warn!(err = %e, path = %plist_path.display(), "failed to remove LaunchAgent plist");
-        } else {
-            tracing::info!(path = %plist_path.display(), "LaunchAgent plist removed");
-        }
-    }
-}
-
-/// Flush the macOS DNS cache. Failures are non-fatal.
-#[cfg(target_os = "macos")]
-fn flush_dns_cache() {
-    match std::process::Command::new("sudo")
-        .args(["dscacheutil", "-flushcache"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("dscacheutil -flushcache ok"),
-        Ok(s) => tracing::warn!(status = %s, "dscacheutil -flushcache failed"),
-        Err(e) => tracing::warn!(err = %e, "dscacheutil -flushcache error"),
-    }
-
-    match std::process::Command::new("sudo")
-        .args(["killall", "-HUP", "mDNSResponder"])
-        .status()
-    {
-        Ok(s) if s.success() => tracing::info!("mDNSResponder HUP ok"),
-        Ok(s) => tracing::warn!(status = %s, "mDNSResponder HUP failed"),
-        Err(e) => tracing::warn!(err = %e, "mDNSResponder HUP error"),
-    }
-}
-
 async fn cmd_network_enable(cfg: &Config) -> Result<()> {
     let domains: Vec<&str> = cfg.intercept.domains.iter().map(|s| s.as_str()).collect();
     let port: u16 = cfg.network_proxy.listen
@@ -1032,8 +932,8 @@ async fn cmd_network_enable(cfg: &Config) -> Result<()> {
     #[cfg(target_os = "macos")]
     {
         let ca_pem = ca::ca_cert_path(&default_ca_dir());
-        launchctl_set_node_ca(&ca_pem);
-        flush_dns_cache();
+        network_helper::launchctl_set_node_ca(&ca_pem);
+        network_helper::flush_dns_cache();
     }
 
     println!("Network proxy enabled. Start the proxy with: privacyclaw network-start");
@@ -1050,8 +950,8 @@ async fn cmd_network_disable() -> Result<()> {
 
     #[cfg(target_os = "macos")]
     {
-        launchctl_unset_node_ca();
-        flush_dns_cache();
+        network_helper::launchctl_unset_node_ca();
+        network_helper::flush_dns_cache();
     }
 
     println!("Network proxy disabled.");

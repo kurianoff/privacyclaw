@@ -756,6 +756,7 @@ fn pump_run_loop(secs: f64) {
     use objc2::runtime::AnyObject;
     use objc2::{class, msg_send_id, msg_send};
 
+    tracing::debug!(timeout_secs = secs, "pump_run_loop: entering ObjC2 run-loop drain");
     unsafe {
         // NSEventMaskAny = u64::MAX
         let app: Retained<AnyObject> =
@@ -768,6 +769,7 @@ fn pump_run_loop(secs: f64) {
                 c"kCFRunLoopDefaultMode".as_ptr()];
 
         // Drain all pending events up to `secs` timeout.
+        let mut dispatched: u32 = 0;
         loop {
             let event: Option<Retained<AnyObject>> = msg_send_id![
                 &*app,
@@ -777,10 +779,15 @@ fn pump_run_loop(secs: f64) {
                 dequeue: true
             ];
             match event {
-                Some(ev) => { let _: () = msg_send![&*app, sendEvent: &*ev]; }
+                Some(ev) => {
+                    tracing::debug!(dispatched, "pump_run_loop: dispatching NSEvent via sendEvent:");
+                    let _: () = msg_send![&*app, sendEvent: &*ev];
+                    dispatched += 1;
+                }
                 None => break,
             }
         }
+        tracing::debug!(dispatched, "pump_run_loop: run-loop drain complete");
     }
 }
 
@@ -851,24 +858,171 @@ fn fetch_config_state(dashboard_url: &str) -> Option<(bool, String)> {
     Some((network_on, pii_level))
 }
 
+// ── Menu event handlers ───────────────────────────────────────────────────────
+
+/// Parse proxy port and intercept domains from `TrayState` config.
+///
+/// Extracted to keep `run()` within the line-count budget.
+fn config_ports(state: &TrayState) -> (Vec<String>, u16) {
+    let domains = state.cfg.intercept.domains.clone();
+    let port = state.cfg.network_proxy.listen
+        .rsplit(':')
+        .next()
+        .and_then(|p| p.parse().ok())
+        .unwrap_or(16441);
+    (domains, port)
+}
+
+/// Rebuild the tray menu from current state and apply it to the tray icon.
+///
+/// Returns the new `Ids` so the caller can replace the stale binding.
+fn rebuild_menu(
+    tray: &tray_icon::TrayIcon,
+    state: &TrayState,
+    current_network_on: bool,
+    current_pii_level: &str,
+) -> Ids {
+    let (new_menu, new_ids) = build_menu(
+        state.proxy_running,
+        state.http_listener_on,
+        current_network_on,
+        current_pii_level,
+    );
+    tray.set_menu(Some(Box::new(new_menu)));
+    new_ids
+}
+
+/// Toggle the proxy on/off. Returns `true` to signal that the menu should be rebuilt.
+fn handle_start_stop(state: &mut TrayState) -> bool {
+    if state.proxy_running {
+        stop_proxy(state);
+    } else {
+        start_proxy(state);
+    }
+    true
+}
+
+/// Toggle the HTTP CONNECT listener independently of `proxy_running`.
+/// Returns `true` when a menu rebuild is needed (only if `proxy_running`).
+fn handle_http_toggle(state: &mut TrayState) -> bool {
+    if !state.proxy_running {
+        return false;
+    }
+    if state.http_task.is_some() {
+        if let Some(handle) = state.http_task.take() {
+            handle.abort();
+        }
+        state.http_listener_on = false;
+        tracing::info!("HTTP proxy listener toggled off");
+    } else {
+        let handle = spawn_http_proxy(
+            &state.rt,
+            state.cfg.clone(),
+            state.cert_cache.clone(),
+            state.store.clone(),
+            state.ws_tx.clone(),
+            state.pii.clone(),
+        );
+        state.http_task = Some(handle);
+        state.http_listener_on = true;
+        tracing::info!("HTTP proxy listener toggled on");
+    }
+    true
+}
+
+/// Toggle network routing in a background thread (requires osascript admin dialog).
+///
+/// `currently_on` is the UI's authoritative state — the direction the toggle should
+/// move FROM.  Do NOT re-read `/etc/hosts` here: the tray's `current_network_on`
+/// (driven by `/api/config` polls) is the single source of truth and can diverge
+/// from stale `/etc/hosts` entries left by a previous crash or force-quit.
+fn handle_network_toggle(currently_on: bool, domains: &[String], port: u16, dashboard_url: &str) {
+    let domains2 = domains.to_vec();
+    let port2 = port;
+    let dashboard2 = dashboard_url.to_string();
+    std::thread::spawn(move || {
+        let enabled = currently_on;
+        tracing::debug!(currently_enabled = enabled, "network proxy toggle requested");
+        let result = if enabled {
+            let r = crate::network_helper::disable();
+            if r.is_ok() {
+                crate::network_helper::launchctl_unset_node_ca();
+                patch_network_enabled(&dashboard2, false);
+            }
+            r
+        } else {
+            let d: Vec<&str> = domains2.iter().map(|s| s.as_str()).collect();
+            let r = crate::network_helper::enable(&d, port2);
+            if r.is_ok() {
+                let ca_pem = crate::ca::ca_cert_path(&default_ca_dir());
+                crate::network_helper::launchctl_set_node_ca(&ca_pem);
+                patch_network_enabled(&dashboard2, true);
+            }
+            r
+        };
+        if let Err(e) = result {
+            tracing::warn!(err = %e, "network proxy toggle failed");
+        }
+    });
+}
+
+/// Set the PII protection level by spawning a subprocess config command.
+fn handle_pii_level(level: &str) {
+    let exe = std::env::current_exe().unwrap_or_default();
+    let level = level.to_string();
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new(exe)
+            .args(["config", "--protection-level", &level])
+            .spawn();
+    });
+}
+
+/// Stop the proxy, unload the LaunchAgent, and notify shutdown.
+fn handle_quit(state: &mut TrayState, shutdown: &std::sync::Arc<tokio::sync::Notify>) {
+    stop_proxy(state);
+    if let Ok(out) = std::process::Command::new("id").arg("-u").output() {
+        let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let _ = std::process::Command::new("launchctl")
+            .args(["bootout", &format!("gui/{uid}/com.privacyclaw.proxy")])
+            .status();
+    }
+    tracing::warn!("tray quit — notifying shutdown");
+    shutdown.notify_waiters();
+}
+
 // ── Proxy lifecycle helpers ───────────────────────────────────────────────────
+
+/// Spawn a single HTTP CONNECT listener task on the given runtime handle.
+///
+/// Used by `start_proxy` and the HTTP toggle handler — both call sites are
+/// identical, so the spawn logic is centralised here.
+fn spawn_http_proxy(
+    rt: &tokio::runtime::Handle,
+    cfg: std::sync::Arc<crate::config::Config>,
+    cert_cache: crate::ca::cert_gen::CertCache,
+    store: crate::storage::Store,
+    ws_tx: tokio::sync::broadcast::Sender<crate::dashboard::WsEvent>,
+    pii: crate::pii::PiiCtx,
+) -> tokio::task::JoinHandle<()> {
+    rt.spawn(async move {
+        if let Err(e) = crate::proxy::run(cfg, cert_cache, store, ws_tx, pii).await {
+            tracing::error!(err = %e, "CONNECT proxy task exited with error");
+        }
+    })
+}
 
 /// Spawn the HTTP CONNECT and network proxy listener tasks and record them in `state`.
 ///
 /// Sets `state.proxy_running = true` and `state.http_listener_on = true`.
 fn start_proxy(state: &mut TrayState) {
-    let (c, cc, s, w, p) = (
+    let http_handle = spawn_http_proxy(
+        &state.rt,
         state.cfg.clone(),
         state.cert_cache.clone(),
         state.store.clone(),
         state.ws_tx.clone(),
         state.pii.clone(),
     );
-    let http_handle = state.rt.spawn(async move {
-        if let Err(e) = crate::proxy::run(c, cc, s, w, p).await {
-            tracing::error!(err = %e, "CONNECT proxy task exited with error");
-        }
-    });
     state.http_task = Some(http_handle);
 
     let (c2, cc2, s2, w2, p2) = (
@@ -909,7 +1063,7 @@ fn stop_proxy(state: &mut TrayState) {
             if let Err(e) = crate::network_helper::disable() {
                 tracing::warn!(err = %e, "network proxy disable on stop_proxy failed");
             } else {
-                crate::launchctl_unset_node_ca();
+                crate::network_helper::launchctl_unset_node_ca();
             }
         });
     }
@@ -936,15 +1090,7 @@ pub fn run(
     shutdown:      Arc<Notify>,
     mut state:     TrayState,
 ) {
-    // Derive setup values from config.
-    let domains: Vec<String> = state.cfg.intercept.domains.clone();
-    let proxy_port: u16 = state.cfg.network_proxy.listen
-        .rsplit(':')
-        .next()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(16441);
-
-    // Derive initial display state.
+    let (domains, proxy_port) = config_ports(&state);
     let network_proxy_on = crate::network_helper::is_enabled();
     let initial_pii_level = derive_pii_level(&state.cfg.pii.mode, true, false, false);
 
@@ -987,23 +1133,11 @@ pub fn run(
         if poll_counter >= 100 {
             poll_counter = 0;
             if let Some((new_net, new_pii)) = fetch_config_state(&dashboard_url) {
-                tracing::debug!(
-                    network_on = new_net,
-                    pii_level = %new_pii,
-                    "config poll result"
-                );
+                tracing::debug!(network_on = new_net, pii_level = %new_pii, "config poll result");
                 if new_net != current_network_on || new_pii != current_pii_level {
                     current_network_on = new_net;
                     current_pii_level  = new_pii;
-                    // Rebuild menu respecting current proxy state.
-                    let (new_menu, new_ids) = build_menu(
-                        state.proxy_running,
-                        state.http_listener_on,
-                        current_network_on,
-                        &current_pii_level,
-                    );
-                    tray.set_menu(Some(Box::new(new_menu)));
-                    ids = new_ids;
+                    ids = rebuild_menu(&tray, &state, current_network_on, &current_pii_level);
                 }
             }
         }
@@ -1013,119 +1147,34 @@ pub fn run(
             tracing::debug!(menu_id = ?ev.id, "tray menu event");
 
             if ev.id == ids.start_stop {
-                if state.proxy_running {
-                    stop_proxy(&mut state);
-                } else {
-                    start_proxy(&mut state);
-                }
-                // Rebuild menu and update icon to reflect new state.
-                let (new_menu, new_ids) = build_menu(
-                    state.proxy_running,
-                    state.http_listener_on,
-                    current_network_on,
-                    &current_pii_level,
-                );
-                tray.set_menu(Some(Box::new(new_menu)));
+                handle_start_stop(&mut state);
+                ids = rebuild_menu(&tray, &state, current_network_on, &current_pii_level);
                 tray.set_icon(Some(make_icon(state.proxy_running))).ok();
-                ids = new_ids;
 
             } else if ev.id == ids.http_proxy {
-                // Toggle the HTTP CONNECT listener without changing proxy_running.
-                if state.proxy_running {
-                    if state.http_task.is_some() {
-                        // Listener is running — abort it.
-                        if let Some(handle) = state.http_task.take() {
-                            handle.abort();
-                        }
-                        state.http_listener_on = false;
-                        tracing::info!("HTTP proxy listener toggled off");
-                    } else {
-                        // Listener is stopped — spawn it again.
-                        let (c, cc, s, w, p) = (
-                            state.cfg.clone(),
-                            state.cert_cache.clone(),
-                            state.store.clone(),
-                            state.ws_tx.clone(),
-                            state.pii.clone(),
-                        );
-                        let handle = state.rt.spawn(async move {
-                            if let Err(e) = crate::proxy::run(c, cc, s, w, p).await {
-                                tracing::error!(err = %e, "CONNECT proxy task exited with error");
-                            }
-                        });
-                        state.http_task = Some(handle);
-                        state.http_listener_on = true;
-                        tracing::info!("HTTP proxy listener toggled on");
-                    }
-                    let (new_menu, new_ids) = build_menu(
-                        state.proxy_running,
-                        state.http_listener_on,
-                        current_network_on,
-                        &current_pii_level,
-                    );
-                    tray.set_menu(Some(Box::new(new_menu)));
-                    ids = new_ids;
+                if handle_http_toggle(&mut state) {
+                    ids = rebuild_menu(&tray, &state, current_network_on, &current_pii_level);
                 }
 
             } else if ev.id == ids.open_dashboard {
-                let _ = std::process::Command::new("open")
-                    .arg(&dashboard_url)
-                    .spawn();
+                let _ = std::process::Command::new("open").arg(&dashboard_url).spawn();
 
             } else if ev.id == ids.network_proxy {
-                // Toggle network proxy in-process on a background thread.
                 // Running in-process ensures the tray's window-server connection
-                // is inherited by osascript, so the admin dialog appears correctly.
-                let domains2 = domains.clone();
-                let port2 = proxy_port;
-                let dashboard2 = dashboard_url.clone();
-                std::thread::spawn(move || {
-                    let enabled = crate::network_helper::is_enabled();
-                    tracing::debug!(currently_enabled = enabled, "network proxy toggle requested");
-                    let result = if enabled {
-                        let r = crate::network_helper::disable();
-                        if r.is_ok() {
-                            crate::launchctl_unset_node_ca();
-                            patch_network_enabled(&dashboard2, false);
-                        }
-                        r
-                    } else {
-                        let d: Vec<&str> = domains2.iter().map(|s| s.as_str()).collect();
-                        let r = crate::network_helper::enable(&d, port2);
-                        if r.is_ok() {
-                            let ca_pem = crate::ca::ca_cert_path(&default_ca_dir());
-                            crate::launchctl_set_node_ca(&ca_pem);
-                            patch_network_enabled(&dashboard2, true);
-                        }
-                        r
-                    };
-                    if let Err(e) = result {
-                        tracing::warn!(err = %e, "network proxy toggle failed");
-                    }
-                });
+                // is inherited by osascript so the admin dialog appears correctly.
+                // Pass current_network_on as authoritative state so the toggle
+                // direction matches what the UI shows, not a stale /etc/hosts read.
+                handle_network_toggle(current_network_on, &domains, proxy_port, &dashboard_url);
+                // Optimistically flip the checkmark immediately; the next /api/config
+                // poll will correct it back if osascript was cancelled or the toggle failed.
+                current_network_on = !current_network_on;
+                ids = rebuild_menu(&tray, &state, current_network_on, &current_pii_level);
 
             } else if let Some(level) = pii_level_for_id(&ev.id, &ids) {
-                let exe = std::env::current_exe().unwrap_or_default();
-                let level = level.to_string();
-                std::thread::spawn(move || {
-                    let _ = std::process::Command::new(exe)
-                        .args(["config", "--protection-level", &level])
-                        .spawn();
-                });
+                handle_pii_level(level);
 
             } else if ev.id == ids.quit {
-                // Clean up before exit.
-                stop_proxy(&mut state);
-                // Unload the LaunchAgent before exiting so launchd (KeepAlive=true)
-                // does not restart the process immediately.
-                if let Ok(out) = std::process::Command::new("id").arg("-u").output() {
-                    let uid = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                    let _ = std::process::Command::new("launchctl")
-                        .args(["bootout", &format!("gui/{uid}/com.privacyclaw.proxy")])
-                        .status();
-                }
-                tracing::warn!("tray quit — notifying shutdown");
-                shutdown.notify_waiters();
+                handle_quit(&mut state, &shutdown);
                 return;
             }
         }

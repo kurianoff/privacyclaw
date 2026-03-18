@@ -17,6 +17,8 @@ Input: **$ARGUMENTS**
 Extract from the input:
 - `scope`: the modernization scope
 - `branch`: the modernize branch (`modernize/<slug>`)
+- `openspec_id`: the OpenSpec change id (`modernize-<slug>`, from Research handoff `OpenSpec` field)
+- `tasks_path`: `openspec/changes/modernize-<slug>/tasks.md` (from Research handoff `Artifacts`)
 - `migration_plan`: path to the migration plan (from Research handoff `Artifacts`)
 - `for_next`: context from Research (task count per batch, complex tasks,
   low-confidence flags, grouped migration task IDs)
@@ -127,12 +129,66 @@ git revert HEAD --no-edit  # if the bump was the last commit
 
 ---
 
+## Live progress reports
+
+Emit a progress announcement to the user at key moments. Do NOT wait until
+the Phase Handoff to tell the user what happened.
+
+**Batch A complete** (after Step 3 passes, or after Developer fixes land):
+
+```
+━━━ Batch A complete
+    Deps bumped: <count> (<names>)
+    Status: clean | required <N> fix iteration(s)
+    Test Runner: green | Contrarian rounds: N
+```
+
+**Task start** (emit immediately at Step 4a, before the worktree is created):
+
+```
+─── Task <task-id>/<total> starting: migrate <dep> <current> → <target>
+    Batch: B | C
+    Files: <list from migration plan>
+    Confidence: high | medium | low
+```
+
+**Task complete** (emit immediately at Step 4h, after the merge commits):
+
+```
+━━━ Task <task-id>/<total> — <dep> <current> → <target>  [merged ✓ | reverted ✗ | blocked ⚠]
+    Investigator: clean | N remaining usages fixed
+    Test Runner: green in <N> iteration(s)
+    Contrarian: approved in <N> round(s)
+```
+
+If reverted or blocked, replace the last two lines with:
+
+```
+    Reason: <why>
+    Next: <what would unblock it, or "none">
+```
+
+**Running tally** — append after every task-complete report:
+
+```
+    Progress: <completed>/<total> tasks merged, <reverted> reverted, <blocked> blocked
+```
+
+---
+
 ## Task scheduling
 
-Build a dependency graph from the migration plan before starting Batch B/C.
-Independent tasks within the same batch (no overlapping files, no task
-dependency) may run in parallel — with their Cargo.toml bumps applied
-serially to `modernize/<slug>` before worktrees are created.
+Read `openspec/changes/<openspec_id>/tasks.md`. Build a dependency graph
+from the `Depends on:` and `Parallel-safe:` fields in each task section.
+Independent tasks (no overlapping files, no declared dependencies) may run
+in parallel — with their Cargo.toml bumps applied serially to
+`modernize/<slug>` before worktrees are created.
+
+**Source of truth for task status:** the `- [ ]`/`- [x]` checkbox on each
+task's completion line in `tasks.md`. All agents read from and write to this
+file — never from memory.
+
+If resuming: skip every task whose checkbox already reads `- [x]`.
 
 ---
 
@@ -177,6 +233,8 @@ cargo clippy -- -D warnings 2>&1
 ```
 
 **If both pass:** record all Tier 1 deps as complete in the migration log.
+In `openspec/changes/<openspec_id>/tasks.md`, mark Batch A done:
+`- [ ] A complete` → `- [x] A complete`
 Proceed to Batch B.
 
 **If either fails:** identify which dep caused the regression by reverting
@@ -212,6 +270,8 @@ bumps serially to `modernize/<slug>` before creating parallel worktrees).
 For each task:
 
 #### Step 4a — Apply Cargo.toml bump and create worktree
+
+**Emit task-start progress report** before creating the worktree.
 
 On `modernize/<slug>`:
 ```bash
@@ -303,8 +363,9 @@ Invoke **test-runner**. Task:
 chain: Simplifier (4d) → Logging Implementer (4e) → Test Runner (4f).
 
 **Maximum fix iterations: 3.** If still red after 3 full chain repeats,
-revert the task (see worktree protocol). Record `Status: reverted` in the
-migration log. Move to the next task. Collect reverts for the final report.
+revert the task (see worktree protocol). In `openspec/changes/<openspec_id>/tasks.md`,
+update the task's checkbox: `- [ ] <task-id> complete` → `- [ ] <task-id> complete — ✗ REVERTED: <reason>`
+Record `Status: reverted` in the migration log. Move to the next task. Collect reverts for the final report.
 
 #### Step 4g — Contrarian: migration quality gate
 
@@ -329,14 +390,20 @@ Invoke **contrarian** with the full handoff chain (Steps 4b–4f). Task:
 **If challenged:** route to the appropriate agent and repeat from the
 indicated step. After fixes, re-run Test Runner and Contrarian.
 
-**Maximum Contrarian rounds: 3.** If not approved after 3 rounds, record as
-blocked, do not merge, surface to user in the final report.
+**Maximum Contrarian rounds: 3.** If not approved after 3 rounds: in
+`openspec/changes/<openspec_id>/tasks.md` update the task's checkbox:
+`- [ ] <task-id> complete` → `- [ ] <task-id> complete — ⚠ BLOCKED: <reason>`
+Record as blocked, do not merge, surface to user in the final report.
 
 #### Step 4h — Merge, clean up team, log
 
 After Contrarian approval:
 
-1. Shut down task team if one was created:
+**Emit task-complete progress report** (merged ✓) with running tally.
+
+1. In `openspec/changes/<openspec_id>/tasks.md`, mark the task done:
+   `- [ ] <task-id> complete` → `- [x] <task-id> complete`
+2. Shut down task team if one was created:
    ```text
    SendMessage({ to: "developer",           message: {type: "shutdown_request"} })
    SendMessage({ to: "investigator",        message: {type: "shutdown_request"} })
@@ -360,9 +427,13 @@ cargo audit 2>&1          # verify no new advisories introduced
 cargo outdated --depth 1 2>&1   # show what remains (excluded/reverted)
 cargo clippy -- -D warnings 2>&1
 cargo test 2>&1
+openspec validate <openspec_id> --strict
 ```
 
 Record results in `.claude/workflow/<slug>/migrate-final.txt`.
+
+Confirm all tasks in `<tasks_path>` are marked `- [x]`. If any blocked or
+reverted tasks remain with `- [ ]`, the Phase Handoff `Open` field must list them.
 
 ---
 
@@ -388,15 +459,19 @@ Phase:     Migrate
 Status:    complete  (or: blocked — <reason>)
 Scope:     <scope>
 Branch:    <branch>
+OpenSpec:  <openspec_id>
 Artifacts:
+  openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
   .claude/workflow/<slug>/migration-log.md
   .claude/workflow/<slug>/migrate-baseline.txt
   .claude/workflow/<slug>/migrate-final.txt
 Decisions:
   - <key migration decisions, reverts, and their reasons>
+  - openspec validate: clean
 For next:  <what Upgrade needs: current Rust edition, codebase health
             post-migration, any known complexity that could affect edition
-            upgrade, blockers if any>
+            upgrade, blockers if any.
+            Run `openspec archive <openspec_id> --yes` after the branch is merged.>
 Open:
   - <reverted tasks: dep, reason, what would unblock>
   - <blocked tasks: dep, reason, user decision needed>

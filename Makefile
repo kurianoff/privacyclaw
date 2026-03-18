@@ -77,11 +77,13 @@ SHARE_DIR   := $(PKG_ROOT)/usr/local/share/privacyclaw
 #   make pkg LLAMA_SERVER=/path/to/llama-server
 LLAMA_SERVER ?= $(shell brew --prefix llama.cpp 2>/dev/null)/bin/llama-server
 
-# Shared pkg layout step (binary must already be at $(DIST)/privacyclaw).
+# Shared pkg layout step (binary must already be at $(DIST)/privacyclaw,
+# and $(APP_DIR) must already be built).
 _pkg-layout:
 	rm -rf $(PKG_ROOT) $(PKG_SCRIPTS) $(DIST)/$(PKG_NAME)
-	mkdir -p $(PKG_ROOT)/usr/local/bin $(SHARE_DIR) $(PKG_SCRIPTS)
+	mkdir -p $(PKG_ROOT)/usr/local/bin $(PKG_ROOT)/Applications $(SHARE_DIR) $(PKG_SCRIPTS)
 	cp $(DIST)/privacyclaw $(PKG_ROOT)/usr/local/bin/privacyclaw
+	cp -r $(APP_DIR) $(PKG_ROOT)/Applications/
 	cp packaging/com.privacyclaw.proxy.plist $(SHARE_DIR)/
 	cp packaging/com.privacyclaw.pf.plist    $(SHARE_DIR)/
 	@if [ -f "$(LLAMA_SERVER)" ]; then \
@@ -103,7 +105,8 @@ _pkg-layout:
 	@echo "Package: $(DIST)/$(PKG_NAME)"
 
 # Universal binary (arm64 + x86_64) for distribution.
-pkg: release-app
+# Builds .app bundle first so it is included in the pkg at /Applications/.
+pkg: app
 	$(MAKE) _pkg-layout
 
 # Current-architecture release build — faster, for local testing.

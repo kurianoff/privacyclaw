@@ -43,6 +43,7 @@ Phase:     <Audit | Research | Migrate | Upgrade>
 Status:    <complete | blocked — reason>
 Scope:     <scope description>
 Branch:    modernize/<slug>
+OpenSpec:  modernize-<slug>
 Artifacts: <newline-separated list of file paths created or modified>
 Decisions: <bullet list of key decisions made in this phase>
 For next:  <2–4 sentences: what the next phase needs to know>
@@ -77,6 +78,8 @@ Contrarian reclassified tokio from Tier 1 to Tier 2 due to deprecated APIs.">
 **Artifacts created / modified**
 <bullet list from handoff Artifacts field, one-sentence description each>
 
+**OpenSpec change**: `modernize-<slug>`
+
 **What goes to Phase <N+1>**
 <verbatim "For next:" field from the Phase Handoff>
 
@@ -100,6 +103,7 @@ exclusion flags. Ask:
 > - Tier 3 (major/breaking): <count deps> — <dep names>
 > - Tier 4 (edition upgrade available): <yes/no>
 > - Contrarian exclusions: <list with reason, or none>
+> OpenSpec change `modernize-<slug>` scaffolded at `openspec/changes/modernize-<slug>/`.
 >
 > Ready to proceed to Research? Any deps to add to the exclusion list?"
 
@@ -114,6 +118,8 @@ the context passed to Research.
 > - Batch C (major/breaking): <count tasks> — <dep names and complexity>
 > - Contrarian exclusions added: <list with reason, or none>
 > - Deps requiring group migration: <list, or none>
+> `openspec validate modernize-<slug> --strict`: clean.
+> Tasks: `openspec/changes/modernize-<slug>/tasks.md`
 >
 > Approve this plan? Any changes to the exclusion list before I start Migration?"
 
@@ -256,6 +262,7 @@ cargo audit
 cargo outdated --depth 1
 cargo clippy -- -D warnings
 cargo test
+openspec validate modernize-<slug> --strict
 ```
 
 Report to the user:
@@ -274,13 +281,20 @@ Deps blocked:  <count> — <names and reasons, or "none">
 Edition upgrade: <completed to <target> | skipped | blocked>
 
 Final checks:
-  cargo audit:   <clean | advisories remaining>
+  cargo audit:    <clean | advisories remaining>
   cargo outdated: <clean | pinned/excluded deps remaining>
-  cargo clippy:  <clean | warnings>
-  cargo test:    <pass count>
+  cargo clippy:   <clean | warnings>
+  cargo test:     <pass count>
+
+OpenSpec change: modernize-<slug>
+  Tasks:    openspec/changes/modernize-<slug>/tasks.md
+  Validate: <clean | issues remaining>
 
 To merge:
   git checkout main && git merge --no-ff modernize/<slug>
+
+After merge:
+  openspec archive modernize-<slug> --yes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
 

@@ -52,34 +52,6 @@ pub fn extract_sse_delta(event: &SseEvent) -> Option<String> {
     result
 }
 
-/// Extract token counts from a non-streaming OpenAI response.
-#[allow(dead_code)]
-pub fn extract_tokens(body: &[u8]) -> (Option<i64>, Option<i64>) {
-    let Ok(v) = serde_json::from_slice::<Value>(body) else {
-        return (None, None);
-    };
-    let tokens_in = v.get("usage")
-        .and_then(|u| u.get("prompt_tokens"))
-        .and_then(|t| t.as_i64());
-    let tokens_out = v.get("usage")
-        .and_then(|u| u.get("completion_tokens"))
-        .and_then(|t| t.as_i64());
-    (tokens_in, tokens_out)
-}
-
-/// Extract full content from a non-streaming OpenAI response.
-#[allow(dead_code)]
-pub fn extract_response_content(body: &[u8]) -> Option<String> {
-    let v: Value = serde_json::from_slice(body).ok()?;
-    v.get("choices")?
-        .as_array()?
-        .first()?
-        .get("message")?
-        .get("content")?
-        .as_str()
-        .map(|s| s.to_string())
-}
-
 impl SseEvent {
     pub fn data_is_done(data: &str) -> bool {
         data.trim() == "[DONE]"
@@ -90,10 +62,6 @@ impl SseEvent {
 mod tests {
     use super::*;
     use crate::parser::sse::SseEvent;
-
-    fn event(event_type: Option<&str>, data: &str) -> SseEvent {
-        SseEvent { event_type: event_type.map(|s| s.to_string()), data: data.to_string() }
-    }
 
     #[test]
     fn test_openai_parse_model_and_messages() {
@@ -119,8 +87,4 @@ mod tests {
         assert!(SseEvent::data_is_done(&e.data));
         assert!(extract_sse_delta(&e).is_none());
     }
-
-    // suppress unused warning for helper in this module
-    #[allow(dead_code)]
-    fn _use_event_helper() { let _ = event(None, ""); }
 }

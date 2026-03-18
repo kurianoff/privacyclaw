@@ -102,7 +102,48 @@ whole file.
 
 ---
 
-## Step 5 — Locate llama-server for bundling
+## Step 5 — Build debug .app bundle
+
+Build the macOS app bundle using the debug binary. Cannot use `make app` because
+that target always runs a release build. Replicate the bundle structure manually:
+
+```bash
+APP_DIR="dist/Privacyclaw.app"
+APP_BIN="${APP_DIR}/Contents/MacOS"
+
+rm -rf "$APP_DIR"
+mkdir -p "$APP_BIN" "${APP_DIR}/Contents/Resources"
+
+cp target/debug/privacyclaw "$APP_BIN/privacyclaw"
+
+# Launch script — no arguments needed; the script calls `start --tray` itself
+printf '#!/bin/bash\nexec "$(dirname "$0")/privacyclaw" start --tray\n' > "$APP_BIN/privacyclaw-app"
+chmod +x "$APP_BIN/privacyclaw-app"
+
+# Info.plist — LSUIElement=true keeps the app out of the Dock
+cat > "${APP_DIR}/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleIdentifier</key><string>com.privacyclaw.app</string>
+  <key>CFBundleName</key><string>Privacyclaw</string>
+  <key>CFBundleVersion</key><string>${VERSION}-dev</string>
+  <key>CFBundleShortVersionString</key><string>${VERSION}-dev</string>
+  <key>LSUIElement</key><true/>
+  <key>LSMinimumSystemVersion</key><string>13.0</string>
+  <key>CFBundleExecutable</key><string>privacyclaw-app</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+</dict></plist>
+PLIST
+
+echo "App bundle: $APP_DIR"
+```
+
+Record `APP_DIR` — it is copied into the pkg layout in Step 6.
+
+---
+
+## Step 6 — Locate llama-server for bundling
 
 Tier 3 PII requires `llama-server`. Find it from the local Homebrew installation:
 
@@ -121,10 +162,10 @@ Record whether llama-server was found — report in the manifest.
 
 ---
 
-## Step 6 — Build .pkg installer (debug)
+## Step 7 — Build .pkg installer (debug)
 
-Use the debug binary already in `dist/privacyclaw`. Run pkgbuild directly so
-this step is independent of `make pkg`, which always does a release build.
+Use the debug binary already in `dist/privacyclaw` and the `.app` bundle from
+Step 5. Run pkgbuild directly — `make pkg` always does a release build.
 
 ```bash
 PKG_ROOT="dist/pkg-root-dev"
@@ -133,9 +174,10 @@ SHARE_DIR="${PKG_ROOT}/usr/local/share/privacyclaw"
 PKG_OUT="dist/privacyclaw-${VERSION}-dev.pkg"
 
 rm -rf "$PKG_ROOT" "$PKG_SCRIPTS" "$PKG_OUT"
-mkdir -p "${PKG_ROOT}/usr/local/bin" "$SHARE_DIR" "$PKG_SCRIPTS"
+mkdir -p "${PKG_ROOT}/usr/local/bin" "${PKG_ROOT}/Applications" "$SHARE_DIR" "$PKG_SCRIPTS"
 
 cp dist/privacyclaw "${PKG_ROOT}/usr/local/bin/privacyclaw"
+cp -r "$APP_DIR" "${PKG_ROOT}/Applications/"
 cp packaging/com.privacyclaw.proxy.plist "$SHARE_DIR/"
 cp packaging/com.privacyclaw.pf.plist    "$SHARE_DIR/"
 
@@ -169,7 +211,7 @@ sudo installer -pkg dist/privacyclaw-<VERSION>-dev.pkg -target /
 
 ---
 
-## Step 7 — Cleanup staging files
+## Step 8 — Cleanup staging files
 
 ```bash
 rm -rf dist/pkg-root-dev dist/pkg-scripts-dev
@@ -187,6 +229,7 @@ Version:  <VERSION>
 Arch:     <TRIPLE>
 Tarball:  /tmp/privacyclaw-<VERSION>-<TRIPLE>.tar.gz
 SHA256:   <SHA>
+App:      dist/Privacyclaw.app
 PKG:      dist/privacyclaw-<VERSION>-dev.pkg
 Formula:  homebrew-privacyclaw/Formula/privacyclaw.rb  (updated, not committed)
 Status:   complete
