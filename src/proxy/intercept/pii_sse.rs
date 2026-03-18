@@ -44,12 +44,11 @@ fn text_delta_pointer(provider: Provider) -> Option<&'static str> {
 pub(super) fn extract_text_delta(provider: Provider, data: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(data).ok()?;
     // Anthropic requires a type guard before reading the text pointer.
-    if provider == Provider::Anthropic {
-        if v["type"].as_str() != Some("content_block_delta")
-            || v["delta"]["type"].as_str() != Some("text_delta")
-        {
-            return None;
-        }
+    if provider == Provider::Anthropic
+        && (v["type"].as_str() != Some("content_block_delta")
+            || v["delta"]["type"].as_str() != Some("text_delta"))
+    {
+        return None;
     }
     let ptr = text_delta_pointer(provider)?;
     v.pointer(ptr).and_then(|t| t.as_str()).map(|s| s.to_string())

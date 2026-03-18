@@ -332,7 +332,7 @@ impl Store {
                 line.as_ref()
                     .map(|l| {
                         serde_json::from_str::<Message>(l)
-                            .map_or(false, |m| m.direction == "request")
+                            .is_ok_and(|m| m.direction == "request")
                     })
                     .unwrap_or(false)
             })
