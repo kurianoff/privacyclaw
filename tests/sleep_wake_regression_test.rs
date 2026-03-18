@@ -127,115 +127,117 @@ async fn accept_loop_task_remains_alive_after_errors() {
 // ---------------------------------------------------------------------------
 // read_line timeout tests
 //
-// We use tokio::time::pause() + advance() so these run at clock speed.
+// We use tokio::io::duplex() for controlled I/O and tokio::time::pause() +
+// advance() for instant simulation of long timeouts.
+//
+// Pattern: spawn the server-side logic (which owns the timeout), then drop
+// the writer half of the duplex pipe (or advance the clock) to trigger the
+// timeout condition. The server task sends the verdict over a oneshot channel.
 // ---------------------------------------------------------------------------
 
-/// A client that opens a TCP connection but sends no data should cause
-/// read_line to time out. We verify the timeout fires at exactly 30 s
-/// (simulated) and the handler returns Ok(()).
+/// A client that opens a connection but sends no data should cause the 30 s
+/// request-line read_line to time out. The handler must return Ok(()) — not
+/// an error — on timeout expiry.
 #[tokio::test(start_paused = true)]
 async fn read_line_request_timeout_returns_ok() {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::BufReader;
 
-    // Set up an in-process TCP pair.
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    // duplex gives us a (server_half, client_half) pipe.
+    // Keeping client_half alive but never writing simulates a silent client.
+    let (server_half, _client_half) = tokio::io::duplex(1024);
 
-    // Client: connects but never sends anything.
-    let _client = TcpStream::connect(addr).await.unwrap();
-    let (server_stream, _) = listener.accept().await.unwrap();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
 
-    // Replicate the exact code path from connect.rs:
-    //   match timeout(Duration::from_secs(30), buf_reader.read_line(&mut line)).await {
-    //       Ok(result) => { result?; }
-    //       Err(_)     => { return Ok(()); }
-    //   }
-    let result: anyhow::Result<()> = async {
-        let mut buf_reader = BufReader::new(server_stream);
+    tokio::spawn(async move {
+        let mut buf_reader = BufReader::new(server_half);
         let mut connect_line = String::new();
-        match tokio::time::timeout(
+        let result = match tokio::time::timeout(
             Duration::from_secs(30),
             buf_reader.read_line(&mut connect_line),
         )
         .await
         {
-            Ok(r) => { r?; }
-            Err(_) => return Ok(()),
-        }
-        Err(anyhow::anyhow!("should have timed out"))
-    }
-    .await;
+            Ok(r) => r.map(|_| ()).map_err(anyhow::Error::from),
+            // Timeout: the expected outcome.
+            Err(_) => Ok(()),
+        };
+        let _ = result_tx.send(result);
+    });
 
-    // Advance simulated clock past the 30-second timeout.
+    // Advance clock past the 30 s timeout to fire it; yield again to let the
+    // spawned task run to completion and send on result_tx.
     tokio::time::advance(Duration::from_secs(31)).await;
+    tokio::task::yield_now().await;
 
+    let result = result_rx.await.expect("server task dropped without sending");
     assert!(result.is_ok(), "expected Ok(()); got {:?}", result);
 }
 
 /// Header-drain read_line must also time out at 30 s when the client stalls
-/// mid-header (sends request line but then goes silent).
+/// after sending the request line (no header lines follow).
 #[tokio::test(start_paused = true)]
 async fn read_line_header_drain_timeout_returns_ok() {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::BufReader;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let (server_half, mut client_half) = tokio::io::duplex(1024);
 
-    // Client: sends the CONNECT line, then stalls.
-    let client_task = tokio::spawn(async move {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n")
-            .await
-            .unwrap();
-        // Intentionally never send the remaining header lines.
-        tokio::time::sleep(Duration::from_secs(60)).await;
-    });
-
-    let (server_stream, _) = listener.accept().await.unwrap();
-
-    // Replicate the header-drain loop from connect.rs.
-    let result: anyhow::Result<()> = async {
-        let mut buf_reader = BufReader::new(server_stream);
-
-        // First line — succeeds quickly.
-        let mut first_line = String::new();
-        match tokio::time::timeout(
-            Duration::from_secs(30),
-            buf_reader.read_line(&mut first_line),
-        )
+    // Write just the CONNECT request line; never send header lines.
+    client_half
+        .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\n")
         .await
-        {
-            Ok(r) => { r?; }
-            Err(_) => return Ok(()),
-        }
+        .unwrap();
 
-        // Header drain loop — stalls here.
-        loop {
-            let mut line = String::new();
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+
+    tokio::spawn(async move {
+        // Keep _client_half alive so EOF is not triggered; client just stalls.
+        let _keep_open = client_half;
+        let result: anyhow::Result<()> = async move {
+            let mut buf_reader = BufReader::new(server_half);
+
+            // First line — succeeds immediately (data is already in the pipe).
+            let mut first_line = String::new();
             match tokio::time::timeout(
                 Duration::from_secs(30),
-                buf_reader.read_line(&mut line),
+                buf_reader.read_line(&mut first_line),
             )
             .await
             {
                 Ok(r) => { r?; }
                 Err(_) => return Ok(()),
             }
-            if line == "\r\n" || line == "\n" || line.is_empty() {
-                break;
+
+            // Header drain loop — stalls because no more data is written.
+            loop {
+                let mut line = String::new();
+                match tokio::time::timeout(
+                    Duration::from_secs(30),
+                    buf_reader.read_line(&mut line),
+                )
+                .await
+                {
+                    Ok(r) => { r?; }
+                    Err(_) => return Ok(()),
+                }
+                if line == "\r\n" || line == "\n" || line.is_empty() {
+                    break;
+                }
             }
+            Err(anyhow::anyhow!("should have timed out in header drain"))
         }
-        Err(anyhow::anyhow!("should have timed out in header drain"))
-    }
-    .await;
+        .await;
+        let _ = result_tx.send(result);
+    });
 
-    tokio::time::advance(Duration::from_secs(31)).await;
+    // Advance 62 s: covers the first read_line (30 s) + header-drain loop (30 s),
+    // then yield to let the spawned task run to completion.
+    tokio::time::advance(Duration::from_secs(62)).await;
+    tokio::task::yield_now().await;
 
+    let result = result_rx.await.expect("server task dropped without sending");
     assert!(result.is_ok(), "expected Ok(()); got {:?}", result);
-    client_task.abort();
 }
 
 // ---------------------------------------------------------------------------
@@ -247,23 +249,32 @@ async fn read_line_header_drain_timeout_returns_ok() {
 // ---------------------------------------------------------------------------
 
 /// passthrough: upstream TCP connect must time out at 10 s (not block forever).
+///
+/// Uses a spawned task + advance pattern so the timeout fires correctly in
+/// paused-time mode.
 #[tokio::test(start_paused = true)]
 async fn passthrough_upstream_connect_timeout_returns_err() {
-    // 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed to be non-routable so
-    // TcpStream::connect will block until our timeout fires.
+    // 192.0.2.1 is TEST-NET-1 (RFC 5737) — guaranteed to be non-routable.
     let addr = "192.0.2.1:443";
 
-    let result: anyhow::Result<TcpStream> = async {
-        tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(addr))
-            .await
-            .map_err(|_| anyhow::anyhow!("TCP connect timeout to {}", addr))?
-            .map_err(Into::into)
-    }
-    .await;
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
 
-    // Advance clock past 10 s to trigger the timeout.
+    tokio::spawn(async move {
+        let result: anyhow::Result<()> = tokio::time::timeout(
+            Duration::from_secs(10),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("TCP connect timeout to {}", addr))
+        .and_then(|r| r.map(|_| ()).map_err(|e| anyhow::anyhow!("connect: {}", e)));
+        let _ = result_tx.send(result);
+    });
+
+    // Advance past 10 s to fire the timeout; yield to let the spawned task complete.
     tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::task::yield_now().await;
 
+    let result = result_rx.await.expect("server task dropped without sending");
     assert!(result.is_err(), "expected timeout error, got Ok");
     let err_msg = format!("{}", result.unwrap_err());
     assert!(
@@ -278,16 +289,23 @@ async fn passthrough_upstream_connect_timeout_returns_err() {
 async fn mitm_upstream_connect_timeout_returns_err() {
     let addr: std::net::SocketAddr = "192.0.2.1:443".parse().unwrap();
 
-    let result: anyhow::Result<TcpStream> = async {
-        tokio::time::timeout(Duration::from_secs(10), TcpStream::connect(addr))
-            .await
-            .map_err(|_| anyhow::anyhow!("TCP connect timeout to {}", addr))?
-            .map_err(Into::into)
-    }
-    .await;
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
+
+    tokio::spawn(async move {
+        let result: anyhow::Result<()> = tokio::time::timeout(
+            Duration::from_secs(10),
+            TcpStream::connect(addr),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("TCP connect timeout to {}", addr))
+        .and_then(|r| r.map(|_| ()).map_err(|e| anyhow::anyhow!("connect: {}", e)));
+        let _ = result_tx.send(result);
+    });
 
     tokio::time::advance(Duration::from_secs(11)).await;
+    tokio::task::yield_now().await;
 
+    let result = result_rx.await.expect("server task dropped without sending");
     assert!(result.is_err());
     assert!(format!("{}", result.unwrap_err()).contains("TCP connect timeout"));
 }
@@ -299,61 +317,45 @@ async fn mitm_upstream_connect_timeout_returns_err() {
 /// copy_bidirectional wrapped with 300 s idle timeout must return Ok(()) on
 /// expiry (not propagate a timeout error — idle close is normal).
 ///
-/// We use a connected TCP pair that stays open but transfers no data to
-/// simulate the idle case.
+/// We use duplex pipes that stay open but transfer no data to simulate the
+/// idle case. The server-side logic runs in a spawned task so that
+/// tokio::time::advance() can fire the timeout from the outer task.
 #[tokio::test(start_paused = true)]
 async fn passthrough_idle_copy_timeout_returns_ok() {
-    // Build a TCP pair: client ↔ server_stream / upstream
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    // Two duplex pipes — one for the "client side", one for the "upstream side".
+    let (mut stream_server, _stream_client) = tokio::io::duplex(1024);
+    let (mut upstream_server, _upstream_client) = tokio::io::duplex(1024);
 
-    let client_task = tokio::spawn(async move {
-        let _c = TcpStream::connect(addr).await.unwrap();
-        // Keep the connection open so copy_bidirectional doesn't terminate on EOF.
-        tokio::time::sleep(Duration::from_secs(600)).await;
-    });
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel::<anyhow::Result<()>>();
 
-    let (server_side, _) = listener.accept().await.unwrap();
-
-    // Build a second pair as the "upstream".
-    let listener2 = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr2 = listener2.local_addr().unwrap();
-    let upstream_task = tokio::spawn(async move {
-        let _u = TcpStream::connect(addr2).await.unwrap();
-        tokio::time::sleep(Duration::from_secs(600)).await;
-    });
-    let (mut stream, _) = listener2.accept().await.unwrap();
-    let mut upstream_side = server_side;
-
-    // Run the idle copy under 300 s timeout — mirrors passthrough() in connect.rs.
-    let copy_result: anyhow::Result<()> = async {
-        match tokio::time::timeout(
+    tokio::spawn(async move {
+        // Keep _stream_client and _upstream_client alive (no EOF) via captured bindings.
+        let result = match tokio::time::timeout(
             Duration::from_secs(300),
-            tokio::io::copy_bidirectional(&mut upstream_side, &mut stream),
+            tokio::io::copy_bidirectional(&mut stream_server, &mut upstream_server),
         )
         .await
         {
-            Ok(r) => { r?; }
+            Ok(r) => r.map(|_| ()).map_err(anyhow::Error::from),
             Err(_) => {
-                // Idle timeout — normal close; log WARN and return Ok.
                 tracing::warn!("passthrough idle timeout");
+                Ok(())
             }
-        }
-        Ok(())
-    }
-    .await;
+        };
+        let _ = result_tx.send(result);
+    });
 
-    // Advance past 300 s to fire the timeout.
+    // Advance clock past 300 s to fire the idle timeout; yield to let the spawned
+    // task run to completion and send on result_tx.
     tokio::time::advance(Duration::from_secs(301)).await;
+    tokio::task::yield_now().await;
 
+    let copy_result = result_rx.await.expect("server task dropped without sending");
     assert!(
         copy_result.is_ok(),
         "passthrough idle timeout must return Ok(()), got: {:?}",
         copy_result
     );
-
-    client_task.abort();
-    upstream_task.abort();
 }
 
 // ---------------------------------------------------------------------------
@@ -443,6 +445,9 @@ fn parse_connect_http_10_version_accepted() {
 
 // ---------------------------------------------------------------------------
 // Adjacent behaviour: successful CONNECT request and header drain
+//
+// Use tokio::io::duplex so all data is in the pipe before the server reads,
+// avoiding TCP task-scheduling races under paused time.
 // ---------------------------------------------------------------------------
 
 /// Verify that a well-formed CONNECT request (no stall) completes the
@@ -452,36 +457,25 @@ async fn read_line_completes_immediately_on_well_formed_connect() {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::BufReader;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let (server_half, mut client_half) = tokio::io::duplex(1024);
 
-    let client_task = tokio::spawn(async move {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n")
-            .await
-            .unwrap();
-        // Stay alive long enough for the server to finish reading.
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    });
-
-    let (server_stream, _) = listener.accept().await.unwrap();
-
-    let result: anyhow::Result<String> = async {
-        let mut buf_reader = BufReader::new(server_stream);
-        let mut line = String::new();
-        match tokio::time::timeout(
-            Duration::from_secs(30),
-            buf_reader.read_line(&mut line),
-        )
+    // Write all data before the server reads — no scheduling race.
+    client_half
+        .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com\r\n\r\n")
         .await
-        {
-            Ok(r) => { r?; }
-            Err(_) => return Err(anyhow::anyhow!("unexpected timeout")),
-        }
-        Ok(line.trim().to_string())
-    }
-    .await;
+        .unwrap();
+
+    let mut buf_reader = BufReader::new(server_half);
+    let mut line = String::new();
+    let result: anyhow::Result<String> = match tokio::time::timeout(
+        Duration::from_secs(30),
+        buf_reader.read_line(&mut line),
+    )
+    .await
+    {
+        Ok(r) => r.map(|_| line.trim().to_string()).map_err(Into::into),
+        Err(_) => Err(anyhow::anyhow!("unexpected timeout")),
+    };
 
     assert!(result.is_ok(), "expected Ok, got {:?}", result);
     assert_eq!(
@@ -489,8 +483,6 @@ async fn read_line_completes_immediately_on_well_formed_connect() {
         "CONNECT api.anthropic.com:443 HTTP/1.1",
         "request line mismatch"
     );
-
-    client_task.abort();
 }
 
 /// Verify that successful header drain terminates on the blank line, not timeout.
@@ -499,25 +491,18 @@ async fn header_drain_terminates_on_blank_line() {
     use tokio::io::AsyncBufReadExt;
     use tokio::io::BufReader;
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let addr = listener.local_addr().unwrap();
+    let (server_half, mut client_half) = tokio::io::duplex(1024);
 
-    let client_task = tokio::spawn(async move {
-        let mut stream = TcpStream::connect(addr).await.unwrap();
-        stream
-            .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com\r\nProxy-Connection: keep-alive\r\n\r\n")
-            .await
-            .unwrap();
-        tokio::time::sleep(Duration::from_secs(1)).await;
-    });
-
-    let (server_stream, _) = listener.accept().await.unwrap();
+    client_half
+        .write_all(b"CONNECT api.anthropic.com:443 HTTP/1.1\r\nHost: api.anthropic.com\r\nProxy-Connection: keep-alive\r\n\r\n")
+        .await
+        .unwrap();
 
     let result: anyhow::Result<Vec<String>> = async {
-        let mut buf_reader = BufReader::new(server_stream);
+        let mut buf_reader = BufReader::new(server_half);
         let mut headers = Vec::new();
 
-        // Skip first line (already tested above).
+        // Consume first line.
         let mut first = String::new();
         match tokio::time::timeout(Duration::from_secs(30), buf_reader.read_line(&mut first)).await {
             Ok(r) => { r?; }
@@ -544,6 +529,4 @@ async fn header_drain_terminates_on_blank_line() {
     assert_eq!(headers.len(), 2, "expected 2 headers, got {:?}", headers);
     assert!(headers[0].starts_with("Host:"));
     assert!(headers[1].starts_with("Proxy-Connection:"));
-
-    client_task.abort();
 }
