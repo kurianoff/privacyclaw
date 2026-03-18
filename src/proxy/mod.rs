@@ -34,7 +34,14 @@ pub async fn run(
     );
 
     loop {
-        let (stream, peer_addr) = listener.accept().await?;
+        let (stream, peer_addr) = match listener.accept().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::warn!(err = %e, "CONNECT proxy: accept() error, retrying");
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                continue;
+            }
+        };
         tracing::info!(peer_addr = %peer_addr, "CONNECT: accepted connection");
 
         let config = config.clone();

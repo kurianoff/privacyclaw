@@ -403,7 +403,7 @@ mod tests {
 
 /// Query 8.8.8.8:53 directly for an A record, bypassing the system resolver
 /// (and thus /etc/hosts). Falls back to 1.1.1.1:53 on timeout.
-async fn resolve_bypass_hosts(hostname: &str) -> Result<IpAddr> {
+pub(super) async fn resolve_bypass_hosts(hostname: &str) -> Result<IpAddr> {
     let query = build_dns_a_query(hostname);
 
     for dns in ["8.8.8.8:53", "1.1.1.1:53"] {

@@ -1,7 +1,7 @@
 ---
 name: fix
 description: Orchestrate the full bug-fix workflow (Fix-Investigate → Planning → Development → Testing). Investigator + Contrarian find and validate the root cause, Plan produces a minimal OpenSpec task list, Develop implements it, Test covers regression. User gates after investigation (root cause confirmed?) and after planning (scope approved?). Standalone skill — not part of the implement flow.
-argument-hint: "<symptom description> [DO NOT TOUCH: <boundaries>]"
+argument-hint: "<symptom description> [DO NOT TOUCH: <boundaries>]  [SLUG: <slug>] [RESUME_FROM: <previous-phase>]"
 allowed-tools: Bash, Skill, Read, Write
 ---
 
@@ -109,7 +109,8 @@ gate — if the root cause is wrong, everything downstream is wasted. Present:
 >
 > Does this match your understanding of the bug? Proceed to Planning?
 >
-> To resume here later: `/fix SLUG: <slug> RESUME_FROM: Planning`"
+> To resume here later: `/fix SLUG: <slug> RESUME_FROM: Planning`
+> To re-run investigation: `/fix SLUG: <slug> RESUME_FROM: Fix-Investigate`"
 
 Wait for explicit confirmation. If confidence is medium or low, flag it:
 
@@ -146,10 +147,21 @@ final report automatically.
 
 ## Step 1 — Git setup and baseline
 
+**Skip this step entirely if `RESUME_FROM` is set to anything.**
+
+If not resuming:
+
 ```bash
 git checkout main && git pull
 git checkout -b fix/<slug>
 mkdir -p .claude/workflow/<slug>
+```
+
+**Skip baseline tests if `RESUME_FROM: Fix-Investigate` or later.**
+
+If not resuming past baseline:
+
+```bash
 cargo test 2>&1 | tee .claude/workflow/<slug>/baseline-tests.txt
 ```
 
@@ -158,7 +170,14 @@ block — fixes may be made on a broken baseline — but note the pre-existing
 failures clearly so Phase 3 (Development) and Phase 4 (Testing) can
 distinguish them from regressions introduced by the fix.
 
-Tell the user: "Branch `fix/<slug>` created. Starting Phase 1 — Fix-Investigate."
+If resuming with an existing branch, verify it exists:
+
+```bash
+git branch --list fix/<slug>
+git checkout fix/<slug>
+```
+
+Tell the user: "Branch `fix/<slug>` ready. Starting Phase 1 — Fix-Investigate."
 
 ---
 
@@ -287,12 +306,23 @@ After merge:
 
 ## Resuming an interrupted run
 
-If `RESUME_FROM: Planning | Development | Testing` is passed as an argument:
-- Load the Fix-Investigate handoff from `.claude/workflow/<slug>/rca.md` and
-  the phase log from `.claude/workflow/<slug>/phase-log.md`
-- Skip phases that are already complete per the phase log
-- Verify the fix branch exists: `git branch --list fix/<slug>`
-- Pick up from the named phase
+Pass `SLUG: <slug> RESUME_FROM: <point>` as the argument to resume. Valid resume points:
+
+| `RESUME_FROM` value | Skips | Starts at |
+|---|---|---|
+| `Baseline` | Branch creation | Baseline `cargo test` |
+| `Fix-Investigate` | Branch creation + baseline | Phase 1 (Fix-Investigate) |
+| `Planning` | Phase 1 | Phase 2 (Planning) |
+| `Development` | Phases 1–2 | Phase 3 (Development) |
+| `Testing` | Phases 1–3 | Phase 4 (Testing) |
+
+When resuming:
+- Load `.claude/workflow/<slug>/phase-log.md` to reconstruct state.
+- For `Planning` or later, load the Fix-Investigate handoff from the phase log.
+- For `Development` or later, load the Planning handoff from the phase log.
+- For `Testing`, load the Development handoff from the phase log.
+- Verify branch: `git branch --list fix/<slug>` and `git checkout fix/<slug>`.
+- Announce which step you are resuming from before proceeding.
 
 ---
 

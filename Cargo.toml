@@ -139,3 +139,7 @@ path = "tests/vault_confidence_test.rs"
 [[test]]
 name = "config_cmd_test"
 path = "tests/config_cmd_test.rs"
+
+[[test]]
+name = "sleep_wake_regression_test"
+path = "tests/sleep_wake_regression_test.rs"
