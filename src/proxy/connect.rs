@@ -74,14 +74,28 @@ pub async fn handle(
 async fn passthrough(mut stream: TcpStream, host: &str, port: u16) -> Result<()> {
     let addr = format!("{}:{}", host, port);
     tracing::debug!(addr = %addr, "connect: passthrough: connecting to upstream");
-    let mut upstream = TcpStream::connect(&addr).await
+    // 3.1 — 10 s timeout on upstream TCP connect.
+    let mut upstream = timeout(Duration::from_secs(10), TcpStream::connect(&addr))
+        .await
+        .with_context(|| format!("TCP connect timeout to {}", addr))?
         .with_context(|| format!("Failed to connect to {}", addr))?;
     tracing::debug!(addr = %addr, "connect: passthrough: upstream connected");
 
     tracing::debug!("connect: sending 200 Connection established to client (passthrough)");
     stream.write_all(b"HTTP/1.1 200 Connection established\r\n\r\n").await?;
 
-    tokio::io::copy_bidirectional(&mut stream, &mut upstream).await?;
+    // 3.2 — 300 s idle timeout on bidirectional copy; idle close is normal, so return Ok.
+    match timeout(
+        Duration::from_secs(300),
+        tokio::io::copy_bidirectional(&mut stream, &mut upstream),
+    )
+    .await
+    {
+        Ok(result) => { result?; }
+        Err(_) => {
+            tracing::warn!(host = %host, port = port, "connect: passthrough idle timeout");
+        }
+    }
     tracing::warn!(host = %host, port = port, "connect: passthrough established and closed");
     Ok(())
 }
@@ -106,7 +120,10 @@ async fn mitm(
         .with_context(|| format!("DNS resolution failed for {}", host))?;
     let addr = std::net::SocketAddr::new(ip, port);
     tracing::debug!(addr = %addr, "connect: connecting to upstream TCP");
-    let upstream_tcp = TcpStream::connect(addr).await
+    // 3.3 — 10 s timeout on upstream TCP connect.
+    let upstream_tcp = timeout(Duration::from_secs(10), TcpStream::connect(addr))
+        .await
+        .with_context(|| format!("TCP connect timeout to {}", addr))?
         .with_context(|| format!("Failed to connect upstream: {}", addr))?;
     tracing::info!(addr = %addr, "connect: upstream TCP connected");
 
@@ -115,7 +132,10 @@ async fn mitm(
     let server_name = ServerName::try_from(host.to_string())
         .context("Invalid server name")?;
     tracing::debug!(host = %host, "connect: starting upstream TLS handshake");
-    let upstream_tls = connector.connect(server_name, upstream_tcp).await
+    // 3.4 — 10 s timeout on upstream TLS handshake.
+    let upstream_tls = timeout(Duration::from_secs(10), connector.connect(server_name, upstream_tcp))
+        .await
+        .with_context(|| format!("TLS handshake timeout for {}", host))?
         .context("Upstream TLS handshake failed")?;
     tracing::info!(host = %host, "connect: upstream TLS handshake done");
 
