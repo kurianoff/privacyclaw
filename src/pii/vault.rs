@@ -1,6 +1,7 @@
 use aho_corasick::{AhoCorasick, AhoCorasickBuilder, MatchKind};
 use serde::{Deserialize, Serialize};
-use sha1::{Digest, Sha1};
+use sha1::{Digest as Sha1Digest, Sha1};
+use sha2::{Digest as Sha2Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -95,6 +96,45 @@ pub struct VaultRecord {
     /// Detection confidence. 0.0 when unknown (legacy data).
     #[serde(default)]
     pub confidence: f32,
+    /// XML token ID (8-char base62). Empty string for legacy records.
+    #[serde(default)]
+    pub token_id: String,
+    /// Bare display value (synthetic without XML wrapper). Empty for legacy records.
+    #[serde(default)]
+    pub display_value: String,
+}
+
+/// Generate a deterministic 8-character base62 token ID.
+///
+/// Computes SHA-256(conversation_id + ":" + entity_index), takes the first 6 bytes,
+/// and encodes them as base62 (`0-9A-Za-z`), yielding exactly 8 characters.
+pub fn generate_token_id(conversation_id: &str, entity_index: u64) -> String {
+    let input = format!("{}:{}", conversation_id, entity_index);
+    let mut hasher = Sha256::new();
+    Sha2Digest::update(&mut hasher, input.as_bytes());
+    let digest = hasher.finalize();
+    // Take first 6 bytes → 48-bit value → base62 encode to 8 chars
+    let val: u64 = u64::from_be_bytes([
+        digest[0], digest[1], digest[2], digest[3], digest[4], digest[5], 0, 0,
+    ]) >> 16;
+    base62_encode_6bytes(val)
+}
+
+/// Assemble the canonical XML token string.
+pub fn xml_token(token_id: &str, display_value: &str) -> String {
+    format!("<pii id=\"{}\">{}</pii>", token_id, display_value)
+}
+
+const BASE62: &[u8] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+
+/// Encode a 48-bit value (first 6 bytes) as exactly 8 base62 characters.
+fn base62_encode_6bytes(mut val: u64) -> String {
+    let mut chars = [0u8; 8];
+    for i in (0..8).rev() {
+        chars[i] = BASE62[(val % 62) as usize];
+        val /= 62;
+    }
+    String::from_utf8(chars.to_vec()).expect("base62 chars are valid UTF-8")
 }
 
 /// Per-conversation bidirectional PII mapping store.
@@ -105,12 +145,14 @@ pub struct PiiVault {
     /// Outbound: original text → synthetic replacement.
     original_to_synthetic: HashMap<String, String>,
     /// Parallel vecs (position i is the same mapping):
-    ///   synthetic_keys[i] → original_values[i] → pii_type_labels[i] → tiers[i] → confidences[i]
+    ///   synthetic_keys[i] → original_values[i] → pii_type_labels[i] → tiers[i] → confidences[i] → token_ids[i]
     synthetic_keys: Vec<String>,
     original_values: Vec<String>,
     pii_type_labels: Vec<String>,
     tiers: Vec<u8>,
     confidences: Vec<f32>,
+    /// TOKEN_ID for each mapping (empty string for legacy entries without token_id).
+    token_ids: Vec<String>,
     /// Fast multi-pattern matcher over synthetic_keys.
     /// None when the vault is empty.
     reverse_automaton: Option<AhoCorasick>,
@@ -120,13 +162,19 @@ pub struct PiiVault {
     pub(crate) rng_seed: u64,
     #[cfg_attr(not(test), allow(dead_code))]
     conversation_id: String,
+    /// XML token → original. Key: `<pii id="TOKEN_ID">DISPLAY_VALUE</pii>`. Level 1 cascade.
+    pub full_token_to_original: HashMap<String, String>,
+    /// TOKEN_ID (8-char base62) → original. Level 2 cascade.
+    pub token_id_to_original: HashMap<String, String>,
+    /// Bare display value → original. Level 3 cascade.
+    pub display_value_to_original: HashMap<String, String>,
 }
 
 impl PiiVault {
     /// Create a new empty vault seeded from `sha1(conversation_id)[0..8]`.
     pub fn new(conversation_id: &str) -> Self {
         let mut h = Sha1::new();
-        h.update(conversation_id.as_bytes());
+        Sha1Digest::update(&mut h, conversation_id.as_bytes());
         let digest = h.finalize();
         let seed = u64::from_le_bytes(digest[..8].try_into().unwrap_or([0u8; 8]));
         Self {
@@ -136,10 +184,14 @@ impl PiiVault {
             pii_type_labels: Vec::new(),
             tiers: Vec::new(),
             confidences: Vec::new(),
+            token_ids: Vec::new(),
             reverse_automaton: None,
             max_synthetic_key_len: 0,
             rng_seed: seed,
             conversation_id: conversation_id.to_string(),
+            full_token_to_original: HashMap::new(),
+            token_id_to_original: HashMap::new(),
+            display_value_to_original: HashMap::new(),
         }
     }
 
@@ -152,13 +204,28 @@ impl PiiVault {
             pii_type_labels: Vec::new(),
             tiers: Vec::new(),
             confidences: Vec::new(),
+            token_ids: Vec::new(),
             reverse_automaton: None,
             max_synthetic_key_len: 0,
             rng_seed,
             conversation_id: conversation_id.to_string(),
+            full_token_to_original: HashMap::new(),
+            token_id_to_original: HashMap::new(),
+            display_value_to_original: HashMap::new(),
         };
         for r in records {
-            v.insert_mapping_raw(r.original, r.synthetic, r.pii_type.label().to_string(), r.tier, r.confidence);
+            let original = r.original.clone();
+            let synthetic = r.synthetic.clone();
+            let token_id = r.token_id.clone();
+            let display_value = if r.display_value.is_empty() { synthetic.clone() } else { r.display_value.clone() };
+            v.insert_mapping_raw_with_token_id(original.clone(), synthetic.clone(), r.pii_type.label().to_string(), r.tier, r.confidence, token_id.clone());
+            // Populate index maps for records with token_id
+            if !token_id.is_empty() {
+                let full_token = xml_token(&token_id, &display_value);
+                v.full_token_to_original.insert(full_token, original.clone());
+                v.token_id_to_original.insert(token_id, original.clone());
+                v.display_value_to_original.insert(display_value, original);
+            }
         }
         v.rebuild_automaton();
         v
@@ -191,7 +258,53 @@ impl PiiVault {
         );
     }
 
+    /// Add a mapping with an externally-computed token_id and display_value.
+    ///
+    /// Populates all three index HashMaps in addition to the core mapping.
+    /// Idempotent: if `original` already exists, this is a no-op.
+    pub fn add_mapping_with_token_id(
+        &mut self,
+        original: &str,
+        display_value: &str,
+        token_id: &str,
+        pii_type: &PiiType,
+        tier: u8,
+        confidence: f32,
+    ) {
+        if self.original_to_synthetic.contains_key(original) {
+            return; // idempotent
+        }
+        let full_token = xml_token(token_id, display_value);
+        self.insert_mapping_raw_with_token_id(original.to_string(), display_value.to_string(), pii_type.label().to_string(), tier, confidence, token_id.to_string());
+        self.full_token_to_original.insert(full_token, original.to_string());
+        self.token_id_to_original.insert(token_id.to_string(), original.to_string());
+        self.display_value_to_original.insert(display_value.to_string(), original.to_string());
+        self.rebuild_automaton();
+        tracing::debug!(
+            mapping_count = self.mapping_count(),
+            token_id,
+            pii_type = pii_type.label(),
+            "vault: add_mapping_with_token_id complete"
+        );
+    }
+
+    /// Cascade Level 2 lookup: find original PII by TOKEN_ID.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn get_by_token_id(&self, token_id: &str) -> Option<&str> {
+        self.token_id_to_original.get(token_id).map(|s| s.as_str())
+    }
+
+    /// Cascade Level 3 lookup: find original PII by bare display value.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub fn get_by_display_value(&self, display_value: &str) -> Option<&str> {
+        self.display_value_to_original.get(display_value).map(|s| s.as_str())
+    }
+
     fn insert_mapping_raw(&mut self, original: String, synthetic: String, pii_type_label: String, tier: u8, confidence: f32) {
+        self.insert_mapping_raw_with_token_id(original, synthetic, pii_type_label, tier, confidence, String::new());
+    }
+
+    fn insert_mapping_raw_with_token_id(&mut self, original: String, synthetic: String, pii_type_label: String, tier: u8, confidence: f32, token_id: String) {
         if synthetic.len() > self.max_synthetic_key_len {
             self.max_synthetic_key_len = synthetic.len();
         }
@@ -201,6 +314,7 @@ impl PiiVault {
         self.pii_type_labels.push(pii_type_label);
         self.tiers.push(tier);
         self.confidences.push(confidence);
+        self.token_ids.push(token_id);
     }
 
     fn rebuild_automaton(&mut self) {
@@ -289,12 +403,15 @@ impl PiiVault {
             .zip(self.pii_type_labels.iter())
             .zip(self.tiers.iter())
             .zip(self.confidences.iter())
-            .map(|((((syn, orig), label), tier), conf)| VaultRecord {
+            .zip(self.token_ids.iter())
+            .map(|(((((syn, orig), label), tier), conf), tid)| VaultRecord {
                 original: orig.clone(),
                 synthetic: syn.clone(),
                 pii_type: PiiType::Custom(label.clone()),
                 tier: *tier,
                 confidence: *conf,
+                token_id: tid.clone(),
+                display_value: syn.clone(), // synthetic_keys stores display values
             })
             .collect()
     }
@@ -342,6 +459,19 @@ impl PiiVault {
             .iter()
             .zip(self.synthetic_keys.iter())
             .map(|(o, s)| (o.as_str(), s.as_str()))
+    }
+
+    /// Copy all three index HashMaps from `other` into `self`, skipping entries already present.
+    fn merge_index_maps_from(&mut self, other: &PiiVault) {
+        for (k, v) in &other.full_token_to_original {
+            self.full_token_to_original.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.token_id_to_original {
+            self.token_id_to_original.entry(k.clone()).or_insert_with(|| v.clone());
+        }
+        for (k, v) in &other.display_value_to_original {
+            self.display_value_to_original.entry(k.clone()).or_insert_with(|| v.clone());
+        }
     }
 
     /// Returns the first 2 bytes of each synthetic key. Keys shorter than 2 bytes are skipped.
@@ -433,6 +563,8 @@ impl VaultRegistry {
                         pii_type: PiiType::Custom(r.pii_type),
                         tier: r.tier.unwrap_or(0),
                         confidence: r.confidence.unwrap_or(0.0),
+                        token_id: String::new(),
+                        display_value: String::new(),
                     })
                     .collect();
                 PiiVault::from_records(conv_id, seed, vault_records)
@@ -477,6 +609,8 @@ impl VaultRegistry {
                     conf,
                 );
             }
+            // Merge index maps (token_id/display_value lookups).
+            into_vault.merge_index_maps_from(&from_vault);
             if !from_vault.is_empty() {
                 into_vault.rebuild_automaton();
                 tracing::info!(from_key = %from_key, into_key = %into_key, "vault: merged session_uuid vault into real conv_id vault");
@@ -504,6 +638,8 @@ impl VaultRegistry {
                         conf,
                     );
                 }
+                // Merge index maps.
+                into_vault.merge_index_maps_from(&from_vault);
                 if !from_vault.is_empty() {
                     into_vault.rebuild_automaton();
                 }
@@ -728,6 +864,8 @@ mod tests {
             pii_type: PiiType::Email,
             tier: 1,
             confidence: 0.9,
+            token_id: String::new(),
+            display_value: String::new(),
         }];
         let vault = PiiVault::from_records("conv-test", 12345u64, records);
 
@@ -967,8 +1105,8 @@ mod tests {
     #[test]
     fn from_records_restores_confidence() {
         let records = vec![
-            VaultRecord { original: "a@a.com".to_string(), synthetic: "x@x.com".to_string(), pii_type: PiiType::Email, tier: 1, confidence: 0.99 },
-            VaultRecord { original: "b@b.com".to_string(), synthetic: "y@y.com".to_string(), pii_type: PiiType::Email, tier: 2, confidence: 0.50 },
+            VaultRecord { original: "a@a.com".to_string(), synthetic: "x@x.com".to_string(), pii_type: PiiType::Email, tier: 1, confidence: 0.99, token_id: String::new(), display_value: String::new() },
+            VaultRecord { original: "b@b.com".to_string(), synthetic: "y@y.com".to_string(), pii_type: PiiType::Email, tier: 2, confidence: 0.50, token_id: String::new(), display_value: String::new() },
         ];
         let vault = PiiVault::from_records("conv-fr-conf", 0, records);
         let quints: Vec<_> = vault.quints().collect();
@@ -989,6 +1127,8 @@ mod tests {
             pii_type: PiiType::Email,
             tier: 0,
             confidence: 0.0,
+            token_id: String::new(),
+            display_value: String::new(),
         }];
         let vault = PiiVault::from_records("conv-zero-conf", 0, records);
         let quints: Vec<_> = vault.quints().collect();
@@ -1009,6 +1149,93 @@ mod tests {
         assert_eq!(quints.len(), 1, "idempotent add must not produce duplicate entries");
         // First mapping's confidence is preserved.
         assert!((quints[0].4 - 0.9).abs() < 1e-5);
+    }
+
+    // ── Group 1: Token ID and index structure tests ────────────────────────────
+
+    #[test]
+    fn generate_token_id_deterministic() {
+        let t1 = generate_token_id("conv-abc", 0);
+        let t2 = generate_token_id("conv-abc", 0);
+        assert_eq!(t1, t2, "same inputs must produce same token_id");
+        assert_eq!(t1.len(), 8, "token_id must be exactly 8 chars");
+        assert!(t1.chars().all(|c| c.is_ascii_alphanumeric()), "all chars must be base62: {t1}");
+    }
+
+    #[test]
+    fn generate_token_id_distinct() {
+        let t0 = generate_token_id("conv-abc", 0);
+        let t1 = generate_token_id("conv-abc", 1);
+        assert_ne!(t0, t1, "different entity_index must produce different token_id");
+        let t_other = generate_token_id("conv-xyz", 0);
+        assert_ne!(t0, t_other, "different conversation_id must produce different token_id");
+    }
+
+    #[test]
+    fn add_mapping_with_token_id_populates_all_maps() {
+        let mut vault = PiiVault::new("test-add-with-tid");
+        vault.add_mapping_with_token_id(
+            "john@acme.com",
+            "alice.brown@example.com",
+            "a3f9b2c1",
+            &PiiType::Email,
+            1,
+            1.0,
+        );
+        // full_token_to_original
+        let full = r#"<pii id="a3f9b2c1">alice.brown@example.com</pii>"#;
+        assert_eq!(vault.full_token_to_original.get(full).map(|s| s.as_str()), Some("john@acme.com"));
+        // token_id_to_original
+        assert_eq!(vault.token_id_to_original.get("a3f9b2c1").map(|s| s.as_str()), Some("john@acme.com"));
+        // display_value_to_original
+        assert_eq!(vault.display_value_to_original.get("alice.brown@example.com").map(|s| s.as_str()), Some("john@acme.com"));
+        // mapping count incremented
+        assert_eq!(vault.mapping_count(), 1);
+    }
+
+    #[test]
+    fn get_by_token_id_hit_and_miss() {
+        let mut vault = PiiVault::new("test-get-by-tid");
+        vault.add_mapping_with_token_id("original@test.com", "synth@example.com", "tok1id00", &PiiType::Email, 1, 1.0);
+        assert_eq!(vault.get_by_token_id("tok1id00"), Some("original@test.com"));
+        assert_eq!(vault.get_by_token_id("zzzzzzzz"), None);
+    }
+
+    #[test]
+    fn get_by_display_value_hit_and_miss() {
+        let mut vault = PiiVault::new("test-get-by-dv");
+        vault.add_mapping_with_token_id("Anne Nicole", "Maria Blinke", "a3f9b2c1", &PiiType::PersonName, 3, 1.0);
+        assert_eq!(vault.get_by_display_value("Maria Blinke"), Some("Anne Nicole"));
+        assert_eq!(vault.get_by_display_value("Unknown Person"), None);
+    }
+
+    #[test]
+    fn from_records_populates_new_maps_from_persisted_token_id() {
+        let records = vec![VaultRecord {
+            original: "john@acme.com".to_string(),
+            synthetic: "alice.brown@example.com".to_string(),
+            pii_type: PiiType::Email,
+            tier: 1,
+            confidence: 1.0,
+            token_id: "a3f9b2c1".to_string(),
+            display_value: "alice.brown@example.com".to_string(),
+        }];
+        let vault = PiiVault::from_records("conv-fr-tid", 0, records);
+        // Level 1 map
+        let full = r#"<pii id="a3f9b2c1">alice.brown@example.com</pii>"#;
+        assert_eq!(vault.full_token_to_original.get(full).map(|s| s.as_str()), Some("john@acme.com"));
+        // Level 2 map
+        assert_eq!(vault.get_by_token_id("a3f9b2c1"), Some("john@acme.com"));
+        // Level 3 map
+        assert_eq!(vault.get_by_display_value("alice.brown@example.com"), Some("john@acme.com"));
+    }
+
+    #[test]
+    fn add_mapping_with_token_id_is_idempotent() {
+        let mut vault = PiiVault::new("test-idem-tid");
+        vault.add_mapping_with_token_id("orig@test.com", "synth@ex.com", "tid0001a", &PiiType::Email, 1, 1.0);
+        vault.add_mapping_with_token_id("orig@test.com", "other@ex.com", "tid0002b", &PiiType::Email, 1, 1.0);
+        assert_eq!(vault.mapping_count(), 1, "second call must be a no-op");
     }
 
     #[test]

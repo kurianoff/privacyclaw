@@ -215,34 +215,32 @@ impl SlmSidecar {
         Ok(confirmed)
     }
 
-    /// Send `text` to the SLM using `SYSTEM_PROMPT_STANDALONE` and extract
-    /// `(original_span, §-wrapped synthetic)` pairs from the rewritten output.
+    /// Call the SLM `/replace` endpoint for T3-first pipeline PII replacement.
     ///
-    /// Returns `None` on HTTP error, timeout, or malformed output (fail-open).
-    pub async fn detect_and_rewrite(
+    /// Sends `{"text": text, "conversation_id": conv_id, "entity_start_index": entity_start_index}`
+    /// to `{endpoint}/replace`. Returns a structured `ReplaceResponse` on success.
+    ///
+    /// Returns `None` on timeout, non-200 response, or JSON parse error — in all these
+    /// cases a `WARN` is logged and the caller falls back to skipping Stage 1.
+    pub async fn replace(
         &self,
         text: &str,
-    ) -> Option<(String, Vec<(String, String)>)> {
-        tracing::debug!(text_len = text.len(), "detect_and_rewrite: enter");
-        let max_tokens = ((text.len() as u32 / 4) + 128).clamp(512, 4096);
+        conversation_id: &str,
+        entity_start_index: u64,
+    ) -> Option<ReplaceResponse> {
+        tracing::debug!(
+            text_len = text.len(),
+            conversation_id,
+            entity_start_index,
+            "Tier3::replace: enter"
+        );
 
-        let req_body = ChatCompletionRequest {
-            model: "local".to_string(),
-            messages: vec![
-                ChatMessage {
-                    role: "system".to_string(),
-                    content: SYSTEM_PROMPT_STANDALONE.to_string(),
-                },
-                ChatMessage {
-                    role: "user".to_string(),
-                    content: text.to_string(),
-                },
-            ],
-            max_tokens,
-            temperature: 0.0,
-        };
-
-        let url = format!("{}/v1/chat/completions", self.endpoint);
+        let url = format!("{}/replace", self.endpoint);
+        let req_body = serde_json::json!({
+            "text": text,
+            "conversation_id": conversation_id,
+            "entity_start_index": entity_start_index,
+        });
 
         let resp = tokio::time::timeout(self.timeout, async {
             self.client.post(&url).json(&req_body).send().await
@@ -252,55 +250,56 @@ impl SlmSidecar {
         let resp = match resp {
             Ok(Ok(r)) => r,
             Ok(Err(e)) => {
-                tracing::warn!(error = %e, "Tier3 standalone: HTTP error contacting SLM");
+                tracing::warn!(error = %e, "Tier3::replace: HTTP error contacting SLM; skipping Stage 1");
                 return None;
             }
             Err(_) => {
-                tracing::warn!(timeout_ms = self.timeout.as_millis(), "Tier3 standalone: timeout contacting SLM");
+                tracing::warn!(timeout_ms = self.timeout.as_millis(), "Tier3::replace: timeout; skipping Stage 1");
                 return None;
             }
         };
 
         if !resp.status().is_success() {
-            tracing::warn!(status = %resp.status(), "Tier3 standalone: SLM returned non-200");
+            tracing::warn!(status = %resp.status(), "Tier3::replace: SLM returned non-200; skipping Stage 1");
             return None;
         }
 
-        let completion: ChatCompletionResponse = match resp.json().await {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::warn!(error = %e, "Tier3 standalone: failed to parse SLM response");
-                return None;
+        match resp.json::<ReplaceResponse>().await {
+            Ok(r) => {
+                tracing::info!(
+                    replacement_count = r.replacements.len(),
+                    "Tier3::replace: response received"
+                );
+                Some(r)
             }
-        };
-
-        let rewritten = completion
-            .choices
-            .first()
-            .map(|c| c.message.content.clone())
-            .unwrap_or_default();
-
-        tracing::debug!(rewritten_len = rewritten.len(), "detect_and_rewrite: SLM response received");
-
-        if !rewritten.contains('§') {
-            tracing::warn!(text_len = text.len(), "Tier3: SLM produced no § markers");
-            return None;
-        }
-
-        let pairs = extract_token_pairs(text, &rewritten);
-
-        // Count markers in rewritten to detect >50% failure.
-        let total_markers = rewritten.chars().filter(|&c| c == '§').count() / 2;
-        if !pairs.is_empty() || total_markers == 0 {
-            Some((rewritten, pairs))
-        } else {
-            tracing::warn!(
-                total_markers = total_markers,
-                "Tier3 standalone: extract_token_pairs returned empty but § markers present; malformed output"
-            );
-            None
+            Err(e) => {
+                tracing::warn!(error = %e, "Tier3::replace: JSON parse error; skipping Stage 1");
+                None
+            }
         }
     }
+}
+
+// ── /replace endpoint types ───────────────────────────────────────────────────
+
+/// Response from the SLM `/replace` endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct ReplaceResponse {
+    pub replacements: Vec<ReplaceReplacement>,
+}
+
+/// A single PII replacement from the SLM `/replace` endpoint.
+#[derive(Debug, serde::Deserialize)]
+pub struct ReplaceReplacement {
+    /// Byte start offset in the original text.
+    pub start: usize,
+    /// Byte end offset (exclusive) in the original text.
+    pub end: usize,
+    /// The SLM-chosen display value (bare synthetic).
+    pub display_value: String,
+    /// PII type label (e.g. "PERSON_NAME", "EMAIL").
+    #[serde(default)]
+    pub pii_type: String,
 }
 
 // ── Prompt helpers ────────────────────────────────────────────────────────────
@@ -324,107 +323,6 @@ fn build_disambiguation_prompt(text: &str, candidates: &[PiiSpan]) -> String {
     }
     s.push_str("\nReply with a JSON array of confirmed indices, e.g. [0, 2]");
     s
-}
-
-pub const SYSTEM_PROMPT_STANDALONE: &str = "\
-You are a PII redactor. Rewrite the user's text replacing every piece of personally \
-identifiable information (names, emails, phones, SSNs, addresses, dates of birth, \
-organization names, API keys, passwords, financial account numbers) with a token of \
-the form §value§ where 'value' is the exact original text of that PII \
-(e.g. §Peter§, §peter@corp.com§, §555-1234§). Do not invent new words. Use the exact \
-substring that appeared in the original as the token label. If the text contains no PII, \
-return it exactly unchanged. Return ONLY the rewritten text with no explanation, preamble, \
-or markdown.";
-
-/// Walk `original` and `rewritten` simultaneously, emitting `(original_span, §original_span§)`
-/// pairs for each `§...§` region found in `rewritten`.
-///
-/// The returned pair key includes the `§` delimiters (vault key = `"§Peter§"`),
-/// and the value is the original substring.
-pub fn extract_token_pairs(original: &str, rewritten: &str) -> Vec<(String, String)> {
-    tracing::debug!(original_len = original.len(), rewritten_len = rewritten.len(), "extract_token_pairs: enter");
-    if !rewritten.contains('§') {
-        return vec![];
-    }
-
-    let mut pairs: Vec<(String, String)> = Vec::new();
-    let mut i_orig = 0usize; // byte position in `original`
-    let mut i_rewr = 0usize; // byte position in `rewritten`
-    let rewr_bytes = rewritten.as_bytes();
-    let orig_bytes = original.as_bytes();
-    let mut failures = 0usize;
-    let mut total_found = 0usize;
-
-    // §...§ is a multi-byte UTF-8 character (U+00A7, 2 bytes: 0xC2 0xA7)
-    const SECTION_SIGN: &[u8] = &[0xC2, 0xA7]; // § in UTF-8
-
-    while i_rewr < rewr_bytes.len() {
-        if rewr_bytes[i_rewr..].starts_with(SECTION_SIGN) {
-            total_found += 1;
-            let search_start = i_rewr + SECTION_SIGN.len();
-            // Find closing §
-            let close_pos = rewr_bytes[search_start..]
-                .windows(SECTION_SIGN.len())
-                .position(|w| w == SECTION_SIGN);
-            let close_pos = match close_pos {
-                Some(p) => search_start + p,
-                None => {
-                    // Unclosed § — skip to end
-                    tracing::warn!("Tier3: unclosed § marker in SLM output");
-                    failures += 1;
-                    i_rewr = rewr_bytes.len();
-                    continue;
-                }
-            };
-            let inner = &rewritten[search_start..close_pos];
-
-            // Look for `inner` in `original` starting from i_orig.
-            let remaining_orig = &original[i_orig..];
-            match remaining_orig.find(inner) {
-                Some(offset) if offset < 50 => {
-                    let orig_start = i_orig + offset;
-                    let orig_end = orig_start + inner.len();
-                    let original_span = original[orig_start..orig_end].to_string();
-                    let token = format!("§{}§", inner);
-                    tracing::debug!(pair_index = pairs.len(), span_len = original_span.len(), "extract_token_pairs: aligned pair found");
-                    pairs.push((original_span, token));
-                    i_orig = orig_end;
-                }
-                Some(offset) => {
-                    // Found but beyond 50-char look-ahead
-                    tracing::warn!(offset, inner, "Tier3: alignment beyond 50-char scan, skipping token");
-                    failures += 1;
-                    // Advance i_orig by the offset so we don't lose position entirely
-                    i_orig += offset;
-                }
-                None => {
-                    tracing::warn!(inner, "Tier3: inner text not found in original, skipping token");
-                    failures += 1;
-                }
-            }
-            // Advance past closing §
-            i_rewr = close_pos + SECTION_SIGN.len();
-        } else {
-            // Non-PII region: advance both pointers by the same number of bytes,
-            // up to the next § marker in `rewritten`.
-            let bytes_until_marker = rewr_bytes[i_rewr..]
-                .windows(SECTION_SIGN.len())
-                .position(|w| w == SECTION_SIGN)
-                .unwrap_or(rewr_bytes.len() - i_rewr);
-            i_orig = (i_orig + bytes_until_marker).min(orig_bytes.len());
-            i_rewr += bytes_until_marker;
-        }
-    }
-
-    if total_found > 0 && failures * 2 > total_found {
-        tracing::warn!(
-            failures = failures,
-            total_found = total_found,
-            "Tier3: >50% of § tokens failed alignment"
-        );
-    }
-
-    pairs
 }
 
 // ── API types ─────────────────────────────────────────────────────────────────
@@ -727,363 +625,66 @@ mod tests {
         // If /bin/sh somehow fails (unlikely), still pass — the start test above covers error path.
     }
 
-    // ── extract_token_pairs tests ───────────────────────────────────────────────
+    // ── SlmSidecar::replace() tests ───────────────────────────────────────────
 
-    /// Single § span: extract_token_pairs returns exactly one pair with the
-    /// original text as key and the §-wrapped token as value.
-    #[test]
-    fn extract_pairs_single_span_email() {
-        let original = "hello alice@example.com world";
-        let rewritten = "hello §alice@example.com§ world";
-        let pairs = extract_token_pairs(original, rewritten);
-        assert_eq!(pairs.len(), 1, "expected 1 pair, got: {:?}", pairs);
-        assert_eq!(pairs[0].0, "alice@example.com");
-        assert_eq!(pairs[0].1, "§alice@example.com§");
-    }
-
-    /// Two § spans extracted in left-to-right order with correct keys.
-    #[test]
-    fn extract_pairs_two_spans_order_preserved() {
-        let original = "Bob called 555-0100";
-        let rewritten = "§Bob§ called §555-0100§";
-        let pairs = extract_token_pairs(original, rewritten);
-        assert_eq!(pairs.len(), 2, "expected 2 pairs, got: {:?}", pairs);
-        assert_eq!(pairs[0].0, "Bob");
-        assert_eq!(pairs[0].1, "§Bob§");
-        assert_eq!(pairs[1].0, "555-0100");
-        assert_eq!(pairs[1].1, "§555-0100§");
-    }
-
-    /// No § markers in rewritten: extract_token_pairs returns empty vec.
-    #[test]
-    fn extract_pairs_no_markers_returns_empty() {
-        let original = "hello world no pii here";
-        let rewritten = "hello world no pii here";
-        let pairs = extract_token_pairs(original, rewritten);
-        assert!(pairs.is_empty(), "expected empty vec, got: {:?}", pairs);
-    }
-
-    /// Unclosed § at end of string: the entire unclosed span is skipped.
-    /// This verifies the code path where no closing § is found (search reaches end of string).
-    #[test]
-    fn extract_pairs_unclosed_marker_at_eos_skips() {
-        let original = "My name is Alice here";
-        // § opens but never closes.
-        let rewritten = "My name is §Alice here";
-        let pairs = extract_token_pairs(original, rewritten);
-        // The unclosed § at end of string: implementation warns and skips to end.
-        // No valid closed pair → result is empty.
-        assert!(pairs.is_empty(),
-            "unclosed § with no closing marker must produce no pairs, got: {:?}", pairs);
-    }
-
-    /// Verify the spec scenario from spec.md:
-    /// rewritten = "§alice@example.com, phone: §555-0100§"
-    /// The algorithm treats the substring between the first and second § as one "inner" span.
-    /// This exercises the ambiguous-§-boundary edge case.
-    #[test]
-    fn extract_pairs_ambiguous_boundary_first_consumes_to_next_marker() {
-        let original = "alice@example.com, phone: 555-0100";
-        // The implementation does not distinguish "unclosed" from "badly-nested" —
-        // it eagerly matches the first § to the next §.
-        // Inner of first § = "alice@example.com, phone: " (found in original at offset 0).
-        let rewritten = "§alice@example.com, phone: §555-0100§";
-        let pairs = extract_token_pairs(original, rewritten);
-        // Exactly one pair is produced: the first §...§ span.
-        // "555-0100" is treated as non-PII passthrough because its § was consumed.
-        assert_eq!(pairs.len(), 1,
-            "ambiguous § boundary: first span consumes up to next §, got: {:?}", pairs);
-        // The produced pair covers the text up to the second §.
-        assert_eq!(pairs[0].0, "alice@example.com, phone: ",
-            "inner span must be the text between first and second §, got: {:?}", pairs[0].0);
-    }
-
-    /// Alignment failure: inner text not found in original → token skipped.
-    #[test]
-    fn extract_pairs_alignment_failure_skips_token() {
-        let original = "Peter is here";
-        // Rewritten introduces a token "Xavier" that does NOT appear in original.
-        let rewritten = "§Xavier§ is here";
-        let pairs = extract_token_pairs(original, rewritten);
-        assert!(pairs.is_empty(),
-            "token not found in original must be skipped, got: {:?}", pairs);
-    }
-
-    /// >50% of tokens fail alignment: the successfully aligned pairs are still
-    /// returned (implementation keeps partial results), warn is emitted.
-    /// We construct 6 § tokens where 4 are not in the original.
-    #[test]
-    #[tracing_test::traced_test]
-    fn extract_pairs_majority_failure_returns_partial_and_warns() {
-        // Original has only "Alice" and "Bob".
-        let original = "Alice and Bob are here today";
-        // Rewritten has 6 tokens: 2 aligned, 4 invented.
-        let rewritten = "§Alice§ and §Bob§ §Ghost1§ §Ghost2§ §Ghost3§ §Ghost4§ are here today";
-        let pairs = extract_token_pairs(original, rewritten);
-        // "Alice" and "Bob" should be found; the 4 ghosts should be skipped.
-        assert_eq!(pairs.len(), 2,
-            "expected 2 aligned pairs (Alice + Bob), got: {:?}", pairs);
-        // warn must be emitted because 4/6 > 50% failed.
-        assert!(logs_contain("Tier3") || logs_contain("50%") || logs_contain("alignment") || logs_contain("failed"),
-            "warn log expected for >50% alignment failure");
-    }
-
-    /// Non-PII text between markers: pointer advances correctly and both spans found.
-    #[test]
-    fn extract_pairs_passthrough_text_advances_correctly() {
-        let original = "Please email alice@corp.com or call 555-9999 for help.";
-        let rewritten = "Please email §alice@corp.com§ or call §555-9999§ for help.";
-        let pairs = extract_token_pairs(original, rewritten);
-        assert_eq!(pairs.len(), 2, "expected 2 pairs, got: {:?}", pairs);
-        assert_eq!(pairs[0].0, "alice@corp.com");
-        assert_eq!(pairs[1].0, "555-9999");
-    }
-
-    // ── detect_and_rewrite tests using mock HTTP servers ──────────────────────
-
-    /// Correct max_tokens and system prompt in the request body sent to the SLM.
-    /// Input text is 1200 chars. Expected max_tokens = max(1200/4 + 128, 512).max(512) = 512.
-    #[tokio::test]
-    async fn detect_and_rewrite_sends_correct_max_tokens_and_system_prompt() {
+    async fn make_mock_http_server(response_body: &str, status: &str) -> (u16, tokio::task::JoinHandle<()>) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
         use tokio::net::TcpListener;
-
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
-
-        // We capture the request body sent by detect_and_rewrite.
-        let (tx, rx) = tokio::sync::oneshot::channel::<Vec<u8>>();
-        let response_body = r#"{"choices":[{"message":{"role":"assistant","content":"no pii text"}}]}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            response_body.len(),
-            response_body
+        let resp = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{response_body}",
+            response_body.len()
         );
-
-        tokio::spawn(async move {
+        let handle = tokio::spawn(async move {
             if let Ok((mut stream, _)) = listener.accept().await {
-                let mut raw = Vec::new();
-                loop {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    raw.extend_from_slice(&tmp[..n]);
-                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                }
-                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
-                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
-                let content_length: usize = headers_str.lines()
-                    .find(|l| l.to_lowercase().starts_with("content-length:"))
-                    .and_then(|l| l.split(':').nth(1))
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
-                let mut body_bytes = raw[header_end + 4..].to_vec();
-                while body_bytes.len() < content_length {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    body_bytes.extend_from_slice(&tmp[..n]);
-                }
-                let _ = tx.send(raw);
-                let _ = stream.write_all(response.as_bytes()).await;
+                let mut raw = vec![0u8; 8192];
+                let _ = stream.read(&mut raw).await;
+                let _ = stream.write_all(resp.as_bytes()).await;
             }
         });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let text_1200: String = "A".repeat(1200);
-        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{}", port), 2000);
-        let _ = sidecar.detect_and_rewrite(&text_1200).await;
-
-        let req_bytes = rx.await.unwrap_or_default();
-        let req_str = String::from_utf8_lossy(&req_bytes);
-
-        // Extract JSON body from HTTP request (after the blank line).
-        let body_start = req_str.find("\r\n\r\n").map(|i| i + 4).unwrap_or(0);
-        let body_json: serde_json::Value = serde_json::from_str(&req_str[body_start..]).unwrap();
-
-        // max_tokens = clamp(1200/4 + 128, 512, 4096) = clamp(428, 512, 4096) = 512
-        assert_eq!(body_json["max_tokens"].as_u64(), Some(512),
-            "max_tokens must be 512 for 1200-char input (floor applied), got: {:?}", body_json["max_tokens"]);
-
-        // messages[0].content must equal SYSTEM_PROMPT_STANDALONE
-        let system_content = body_json["messages"][0]["content"].as_str().unwrap_or("");
-        assert_eq!(system_content, SYSTEM_PROMPT_STANDALONE,
-            "system message content must equal SYSTEM_PROMPT_STANDALONE");
-
-        // messages[1].content must equal the input text
-        let user_content = body_json["messages"][1]["content"].as_str().unwrap_or("");
-        assert_eq!(user_content, text_1200.as_str(),
-            "user message content must equal the input text");
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        (port, handle)
     }
 
-    /// Well-formed response with § markers is parsed into pairs.
+    /// replace() with a valid response returns Some(ReplaceResponse).
     #[tokio::test]
-    async fn detect_and_rewrite_parses_well_formed_response() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let mock_content = "§foo§ and §bar§";
-        let response_body = format!(
-            r#"{{"choices":[{{"message":{{"role":"assistant","content":"{}"}}}}]}}"#,
-            mock_content
-        );
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-
-        tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut raw = Vec::new();
-                loop {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    raw.extend_from_slice(&tmp[..n]);
-                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                }
-                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
-                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
-                let content_length: usize = headers_str.lines()
-                    .find(|l| l.to_lowercase().starts_with("content-length:"))
-                    .and_then(|l| l.split(':').nth(1))
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
-                let mut body_bytes = raw[header_end + 4..].to_vec();
-                while body_bytes.len() < content_length {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    body_bytes.extend_from_slice(&tmp[..n]);
-                }
-                let _ = stream.write_all(response.as_bytes()).await;
-            }
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{}", port), 2000);
-        let result = sidecar.detect_and_rewrite("foo and bar").await;
-
-        let (rewritten, pairs) = result.expect("expected Some(rewritten, pairs)");
-        assert!(rewritten.contains('§'), "rewritten must contain § markers");
-        assert_eq!(pairs.len(), 2, "expected 2 pairs, got: {:?}", pairs);
-        assert_eq!(pairs[0].0, "foo");
-        assert_eq!(pairs[1].0, "bar");
+    async fn replace_success_returns_response() {
+        let body = r#"{"replacements":[{"start":0,"end":4,"display_value":"Maria","pii_type":"PERSON_NAME"}]}"#;
+        let (port, _h) = make_mock_http_server(body, "200 OK").await;
+        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{port}"), 2000);
+        let result = sidecar.replace("Anne said hello", "conv-1", 0).await;
+        let resp = result.expect("expected Some");
+        assert_eq!(resp.replacements.len(), 1);
+        assert_eq!(resp.replacements[0].display_value, "Maria");
+        assert_eq!(resp.replacements[0].start, 0);
+        assert_eq!(resp.replacements[0].end, 4);
     }
 
-    /// HTTP timeout returns None.
+    /// replace() on timeout returns None.
     #[tokio::test]
-    async fn detect_and_rewrite_timeout_returns_none() {
-        // No server listening; connection refused or timeout.
-        let sidecar = SlmSidecar::new("http://127.0.0.1:19989", 50);
-        let result = sidecar.detect_and_rewrite("some text here").await;
-        assert!(result.is_none(), "timeout must return None, got: {:?}", result);
+    async fn replace_timeout_returns_none() {
+        let sidecar = SlmSidecar::new("http://127.0.0.1:19985", 50);
+        let result = sidecar.replace("some text", "conv-t", 0).await;
+        assert!(result.is_none(), "timeout must return None");
     }
 
-    /// HTTP 500 returns None.
+    /// replace() on HTTP 500 returns None.
     #[tokio::test]
-    async fn detect_and_rewrite_http_500_returns_none() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut raw = Vec::new();
-                loop {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    raw.extend_from_slice(&tmp[..n]);
-                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                }
-                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
-                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
-                let content_length: usize = headers_str.lines()
-                    .find(|l| l.to_lowercase().starts_with("content-length:"))
-                    .and_then(|l| l.split(':').nth(1))
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
-                let mut body_bytes = raw[header_end + 4..].to_vec();
-                while body_bytes.len() < content_length {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    body_bytes.extend_from_slice(&tmp[..n]);
-                }
-                let _ = stream.write_all(b"HTTP/1.1 500 Internal Server Error\r\nContent-Length: 0\r\n\r\n").await;
-            }
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{}", port), 2000);
-        let result = sidecar.detect_and_rewrite("some text here").await;
-        assert!(result.is_none(), "HTTP 500 must return None, got: {:?}", result);
+    async fn replace_http_500_returns_none() {
+        let (port, _h) = make_mock_http_server("", "500 Internal Server Error").await;
+        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{port}"), 2000);
+        let result = sidecar.replace("some text", "conv-500", 0).await;
+        assert!(result.is_none(), "HTTP 500 must return None");
     }
 
-    /// Response with no § markers returns None (no PII detected).
-    /// The implementation returns None when the SLM response contains no § markers,
-    /// treating "no markers" as indistinguishable from a detection failure.
+    /// replace() on malformed JSON returns None.
     #[tokio::test]
-    async fn detect_and_rewrite_no_section_sign_returns_none() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-        use tokio::net::TcpListener;
-
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let port = listener.local_addr().unwrap().port();
-
-        let response_body = r#"{"choices":[{"message":{"role":"assistant","content":"just plain text no pii"}}]}"#;
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
-            response_body.len(),
-            response_body
-        );
-
-        tokio::spawn(async move {
-            if let Ok((mut stream, _)) = listener.accept().await {
-                let mut raw = Vec::new();
-                loop {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    raw.extend_from_slice(&tmp[..n]);
-                    if raw.windows(4).any(|w| w == b"\r\n\r\n") { break; }
-                }
-                let header_end = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap_or(raw.len());
-                let headers_str = std::str::from_utf8(&raw[..header_end]).unwrap_or("");
-                let content_length: usize = headers_str.lines()
-                    .find(|l| l.to_lowercase().starts_with("content-length:"))
-                    .and_then(|l| l.split(':').nth(1))
-                    .and_then(|v| v.trim().parse().ok())
-                    .unwrap_or(0);
-                let mut body_bytes = raw[header_end + 4..].to_vec();
-                while body_bytes.len() < content_length {
-                    let mut tmp = vec![0u8; 4096];
-                    let n = stream.read(&mut tmp).await.unwrap_or(0);
-                    if n == 0 { break; }
-                    body_bytes.extend_from_slice(&tmp[..n]);
-                }
-                let _ = stream.write_all(response.as_bytes()).await;
-            }
-        });
-
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
-
-        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{}", port), 2000);
-        let result = sidecar.detect_and_rewrite("just plain text no pii").await;
-
-        // After Fix 6, the implementation returns None when no § markers found.
-        assert!(result.is_none(),
-            "no § markers → detect_and_rewrite must return None, got: {:?}", result);
+    async fn replace_malformed_json_returns_none() {
+        let (port, _h) = make_mock_http_server("not-json{{", "200 OK").await;
+        let sidecar = SlmSidecar::new(&format!("http://127.0.0.1:{port}"), 2000);
+        let result = sidecar.replace("some text", "conv-bad", 0).await;
+        assert!(result.is_none(), "malformed JSON must return None");
     }
 
     /// --n-predict flag is absent from the SidecarProcess spawn command.

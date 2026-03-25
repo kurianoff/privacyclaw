@@ -55,6 +55,21 @@ else
     echo "[privacyclaw] WARNING: llama-server not bundled — Tier 3 PII requires llama-server. Run: brew install llama.cpp"
 fi
 
+# ── Bundle privacyclaw-slm-sidecar (Python sidecar) into user bin dir ─────────
+# The sidecar is optional — the proxy starts without it. Tier 3 (/replace endpoint)
+# requires the sidecar to be running alongside llama-server.
+SLM_SIDECAR_SRC="$SHARE_DIR/privacyclaw-slm-sidecar"
+SLM_SIDECAR_DEST="$USER_HOME/Library/Application Support/privacyclaw/bin/privacyclaw-slm-sidecar"
+
+if [ -f "$SLM_SIDECAR_SRC" ]; then
+    mkdir -p "$(dirname "$SLM_SIDECAR_DEST")"
+    cp "$SLM_SIDECAR_SRC" "$SLM_SIDECAR_DEST"
+    chmod 755 "$SLM_SIDECAR_DEST"
+    echo "[privacyclaw] privacyclaw-slm-sidecar installed to $SLM_SIDECAR_DEST"
+else
+    echo "[privacyclaw] INFO: privacyclaw-slm-sidecar not present in package — Tier 3 /replace endpoint unavailable. Sidecar can be installed separately."
+fi
+
 # Fix ownership of the entire privacyclaw data dir (handles reinstall cases).
 chown -R "$ACTUAL_USER" "$USER_HOME/Library/Application Support/privacyclaw" 2>/dev/null || true
 

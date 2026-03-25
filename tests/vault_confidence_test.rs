@@ -85,8 +85,8 @@ fn confidence_vec_length_matches_mapping_count() {
 #[test]
 fn from_records_preserves_confidence() {
     let records = vec![
-        VaultRecord { original: "a@a.com".to_string(), synthetic: "x@x.com".to_string(), pii_type: PiiType::Email, tier: 1, confidence: 0.95 },
-        VaultRecord { original: "b@b.com".to_string(), synthetic: "y@y.com".to_string(), pii_type: PiiType::Email, tier: 2, confidence: 0.60 },
+        VaultRecord { original: "a@a.com".to_string(), synthetic: "x@x.com".to_string(), pii_type: PiiType::Email, tier: 1, confidence: 0.95, token_id: String::new(), display_value: String::new() },
+        VaultRecord { original: "b@b.com".to_string(), synthetic: "y@y.com".to_string(), pii_type: PiiType::Email, tier: 2, confidence: 0.60, token_id: String::new(), display_value: String::new() },
     ];
     let vault = PiiVault::from_records("test-conv", 12345, records);
 
@@ -110,6 +110,8 @@ fn from_records_zero_confidence_survives() {
         pii_type: PiiType::Email,
         tier: 0,
         confidence: 0.0,  // legacy sentinel
+        token_id: String::new(),
+        display_value: String::new(),
     }];
     let vault = PiiVault::from_records("legacy-conv", 0, records);
     let quints: Vec<_> = vault.quints().collect();
@@ -223,6 +225,8 @@ fn confidence_end_to_end_vault_restore() {
         pii_type: PiiType::Custom(r.pii_type),
         tier: r.tier.unwrap_or(0),
         confidence: r.confidence.unwrap_or(0.0),
+        token_id: String::new(),
+        display_value: String::new(),
     }).collect();
     let vault = PiiVault::from_records(&conv_id, seed, vault_records);
 
@@ -256,6 +260,8 @@ fn none_confidence_in_stored_record_maps_to_zero_in_from_records() {
         pii_type: PiiType::Custom(stored.pii_type.clone()),
         tier: stored.tier.unwrap_or(0),
         confidence: stored.confidence.unwrap_or(0.0),
+        token_id: String::new(),
+        display_value: String::new(),
     };
 
     assert_eq!(vault_record.tier, 0, "None tier should map to 0");

@@ -316,15 +316,15 @@ async fn handle_c2u_pii(
             original_body.clone()
         };
 
-        // Stage 2: system instruction injection (T3 standalone + replace mode only).
+        // Stage 2: system instruction injection (any PII replace mode).
         // This is unconditional on stage 1 — the reminder must be injected even when
         // no PII was found in this particular request.
         let t3_standalone_replace = pii
             .as_ref()
-            .map(|p| p.pipeline.slm_standalone && p.mode == PiiMode::Replace)
+            .map(|p| p.mode == PiiMode::Replace)
             .unwrap_or(false);
         let forward_body = if t3_standalone_replace {
-            tracing::debug!(provider = provider.as_str(), "c2u_pii: attempting system instruction injection (T3 standalone)");
+            tracing::debug!(provider = provider.as_str(), "c2u_pii: attempting system instruction injection (PII replace mode)");
             match inject_system_instruction_into_body(&working_body, provider) {
                 Some(injected) => {
                     tracing::debug!(provider = provider.as_str(), "c2u_pii: system instruction injection succeeded");

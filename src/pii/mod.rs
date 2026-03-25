@@ -80,14 +80,14 @@ struct MessageTextEntry {
     text: String,
 }
 
-/// Tier 1 + optional Tier 2 (GLiNER NER) + optional Tier 3 (SLM disambiguation).
+/// Tier 1 + optional Tier 2 (GLiNER NER) + optional Tier 3 (SLM).
+///
+/// Execution order: T3 (Stage 1, if enabled) → T1/T2 (Stage 2, with exclusion zones).
 pub struct PiiPipeline {
     pub tier2: Option<tier2::Tier2Detector>,
     pub slm: Option<tier3::SlmSidecar>,
-    /// Spans with confidence ≥ this value bypass Tier 3 (treated as confirmed).
+    /// Spans with confidence ≥ this value bypass Tier 3 disambiguation (treated as confirmed).
     pub slm_confidence_threshold: f32,
-    /// True when operating in T3 standalone mode: SLM only, no Tier 1/2 regex/NER.
-    pub slm_standalone: bool,
 }
 
 /// Walk the `messages` / `contents` array in `value` and return one `MessageTextEntry`
@@ -122,20 +122,21 @@ fn collect_message_texts(
     entries
 }
 
-/// System reminder injected into forwarded requests when T3 standalone mode is active.
-/// Instructs the upstream LLM to treat `§value§` tokens as opaque identifiers.
+/// System reminder injected into forwarded requests when PII replace mode is active.
+/// Instructs the upstream LLM to treat `<pii id="...">...</pii>` elements as atomic units.
 pub const SYSTEM_REMINDER: &str = "\
-The user's message may contain privacy tokens of the form §value§ (e.g. §Peter§, \
-§peter@corp.com§). These tokens represent redacted personally identifiable information. \
-You MUST treat §value§ tokens as opaque literals: do not interpret, expand, or modify them. \
-When echoing or referencing content that contains §value§ tokens, reproduce the tokens \
-exactly as written, including the § delimiters.";
+The user's message may contain privacy tokens of the form <pii id=\"TOKEN_ID\">DISPLAY_VALUE</pii> \
+(e.g. <pii id=\"a3f9b2c1\">alice.brown@example.com</pii>). These tokens represent redacted \
+personally identifiable information. You MUST treat <pii> elements as atomic, opaque units: \
+do not interpret, expand, modify, or split them. When echoing or referencing content that \
+contains <pii> elements, reproduce the entire element exactly as written, including the id \
+attribute and closing tag.";
 
 impl PiiPipeline {
     /// Tier 1 only — no NER or SLM. Used for unit tests and when optional tiers are disabled.
     #[cfg_attr(not(test), allow(dead_code))]
     pub fn tier1_only() -> Self {
-        Self { tier2: None, slm: None, slm_confidence_threshold: 0.7, slm_standalone: false }
+        Self { tier2: None, slm: None, slm_confidence_threshold: 0.7 }
     }
 
     /// Production constructor. Loads Tier 2 and Tier 3 according to config.
@@ -148,18 +149,19 @@ impl PiiPipeline {
                 None
             },
             slm_confidence_threshold: cfg.slm.confidence_threshold,
-            slm_standalone: crate::config::is_t3_standalone(&cfg.tiers),
         }
     }
 
     /// Full async pipeline used by the proxy intercept path.
     ///
-    /// Takes `vault_handle` (not a pre-locked guard) so the vault write-lock is only
-    /// held during the synchronous replacement step — never across `.await` points.
+    /// Implements the T3-first pipeline:
+    ///   Stage 1 (when tiers.slm): call `/replace` on raw text. On success, reconstruct
+    ///     modified text right-to-left, vault-insert each T3 replacement, compute exclusion zones.
+    ///   Stage 2 (when tiers.regex || tiers.ner): detect T1/T2 spans on the Stage-1 output,
+    ///     skipping exclusion zones. Optionally disambiguate low-confidence spans with SLM.
+    ///   Entity indices are pre-assigned in sorted start-offset order before any vault write.
     ///
-    /// Detection order: Tier 1 regex → Tier 2 NER (if loaded) → merge spans →
-    /// Tier 3 SLM disambiguation of low-confidence spans (if configured).
-    /// In T3 standalone mode, skips Tier 1/2 and delegates entirely to the SLM.
+    /// The vault write-lock is held only during synchronous replacement, never across .await.
     pub async fn process_request_body_async(
         &self,
         body: &[u8],
@@ -167,11 +169,6 @@ impl PiiPipeline {
         provider: Provider,
         locale: &Locale,
     ) -> Option<(Vec<u8>, Vec<PiiDetection>)> {
-        if self.slm_standalone {
-            tracing::debug!(body_len = body.len(), provider = provider.as_str(), "process_request_body_async: T3 standalone fast-path activated");
-            return self.process_body_t3_standalone(body, vault_handle, provider).await;
-        }
-
         let text_str = match std::str::from_utf8(body) {
             Ok(s) => s,
             Err(_) => {
@@ -199,14 +196,93 @@ impl PiiPipeline {
             return None;
         }
 
-        // ── Phase 2: detect spans per text (async, no vault lock) ─────────────
-        let mut span_sets: Vec<Vec<PiiSpan>> = Vec::with_capacity(entries.len());
-        for entry in &entries {
-            span_sets.push(self.detect_spans(&entry.text, locale).await);
+        let has_t3 = self.slm.is_some();
+        // T1 (regex) always available; T2 (NER) optional. Stage 2 runs if either is in scope.
+        let has_t1t2 = true; // Tier 1 is always compiled in; Tier 2 gates on self.tier2.is_some()
+
+        // ── Phase 2: per-entry T3 → T1/T2 pipeline (async, no vault lock) ────
+        struct EntryResult {
+            replaced_text: String,
+            stage1_spans: Vec<(usize, usize, String, String)>, // (start, end, display_value, pii_type)
+            stage2_spans: Vec<PiiSpan>,
         }
 
-        let any_spans = span_sets.iter().any(|s| !s.is_empty());
-        if !any_spans {
+        let mut entry_results: Vec<Option<EntryResult>> = Vec::with_capacity(entries.len());
+
+        for entry in &entries {
+            let text = &entry.text;
+
+            // --- Stage 1: T3 /replace ---
+            let (working_text, stage1_spans, exclusion_zones) = if has_t3 {
+                let slm = self.slm.as_ref().unwrap();
+                let base_index = vault_handle.read().unwrap().mapping_count() as u64;
+                match slm.replace(text, "conv", base_index).await {
+                    Some(resp) if !resp.replacements.is_empty() => {
+                        // Reconstruct modified text right-to-left for correct byte offsets.
+                        let mut sorted = resp.replacements;
+                        sorted.sort_by_key(|r| r.start);
+                        let mut result_text = text.clone();
+                        let mut excl_zones: Vec<(usize, usize)> = Vec::new();
+                        // Right-to-left substitution to preserve earlier offsets.
+                        let mut spans_info: Vec<(usize, usize, String, String)> = Vec::new();
+                        for r in sorted.iter().rev() {
+                            if r.start > r.end || r.end > result_text.len() { continue; }
+                            // Generate token_id based on base_index + position-in-sorted
+                            let idx = sorted.iter().position(|x| x.start == r.start).unwrap_or(0);
+                            let conv_id = "conv"; // placeholder; real conv_id not available here
+                            let token_id = vault::generate_token_id(conv_id, base_index + idx as u64);
+                            let xml = vault::xml_token(&token_id, &r.display_value);
+                            result_text.replace_range(r.start..r.end, &xml);
+                            spans_info.push((r.start, r.start + xml.len(), r.display_value.clone(), r.pii_type.clone()));
+                        }
+                        // Recompute exclusion zones after all right-to-left substitutions.
+                        // They are the positions of the xml tokens in the result text.
+                        for (s, e, _, _) in &spans_info {
+                            excl_zones.push((*s, *e));
+                        }
+                        tracing::info!(
+                            t3_spans = spans_info.len(),
+                            text_len = text.len(),
+                            "pipeline: Stage 1 (T3) complete"
+                        );
+                        (result_text, spans_info, excl_zones)
+                    }
+                    Some(_) => {
+                        tracing::debug!("pipeline: Stage 1 returned empty replacements; skipping Stage 1");
+                        (text.clone(), vec![], vec![])
+                    }
+                    None => {
+                        tracing::warn!("pipeline: Stage 1 (T3 /replace) failed; falling back to raw text");
+                        (text.clone(), vec![], vec![])
+                    }
+                }
+            } else {
+                (text.clone(), vec![], vec![])
+            };
+
+            // --- Stage 2: T1/T2 on working_text with exclusion zones ---
+            let stage2_spans = if has_t1t2 {
+                let all_spans = self.detect_spans(&working_text, locale).await;
+                detect_spans_with_exclusions(all_spans, &exclusion_zones)
+            } else {
+                vec![]
+            };
+
+            tracing::debug!(
+                stage2_spans = stage2_spans.len(),
+                "pipeline: Stage 2 (T1/T2) complete"
+            );
+
+            let has_any = !stage1_spans.is_empty() || !stage2_spans.is_empty();
+            if has_any {
+                entry_results.push(Some(EntryResult { replaced_text: working_text, stage1_spans, stage2_spans }));
+            } else {
+                entry_results.push(None);
+            }
+        }
+
+        let any_results = entry_results.iter().any(|r| r.is_some());
+        if !any_results {
             return None;
         }
 
@@ -215,16 +291,63 @@ impl PiiPipeline {
         let mut any_replaced = false;
         {
             let mut vault = vault_handle.write().unwrap();
+            let base_index = vault.mapping_count() as u64;
             let msgs = match value.get_mut(messages_field).and_then(|v| v.as_array_mut()) {
                 Some(a) => a,
                 None => return None,
             };
 
             for (i, entry) in entries.iter().enumerate() {
-                let spans = &span_sets[i];
-                if spans.is_empty() {
+                let result = match &entry_results[i] {
+                    Some(r) => r,
+                    None => continue,
+                };
+
+                // Collect all spans (Stage 1 + Stage 2) sorted by start for entity index assignment.
+                // Stage 1 spans are already embedded in replaced_text; we just need vault inserts.
+                // Stage 2 spans need both text replacement and vault inserts.
+
+                // Vault-insert Stage 1 spans.
+                let conv_id = "conv"; // placeholder
+                for (j, (_, _, display_val, pii_type_str)) in result.stage1_spans.iter().enumerate() {
+                    let token_id = vault::generate_token_id(conv_id, base_index + j as u64);
+                    let pii_type = PiiType::Custom(pii_type_str.clone());
+                    vault.add_mapping_with_token_id(
+                        &format!("T3_{j}"), // placeholder original; SLM doesn't return originals
+                        display_val,
+                        &token_id,
+                        &pii_type,
+                        3,
+                        1.0,
+                    );
+                    all_detections.push(PiiDetection {
+                        entity_type: pii_type_str.clone(),
+                        original: format!("T3_{j}"),
+                        synthetic: display_val.clone(),
+                        tier: 3,
+                        confidence: 1.0,
+                        message_id: None,
+                    });
+                }
+
+                // Apply Stage 2 replacements to replaced_text using XML token format.
+                let stage2_base = base_index + result.stage1_spans.len() as u64;
+                let (final_text, stage2_detections) = replace_with_spans_xml(
+                    &result.replaced_text,
+                    &result.stage2_spans,
+                    locale,
+                    &mut vault,
+                    conv_id,
+                    stage2_base,
+                );
+                all_detections.extend(stage2_detections);
+
+                let text_changed = final_text != entry.text;
+                if !text_changed && result.stage1_spans.is_empty() {
                     continue;
                 }
+
+                // Write back to JSON value.
                 let msg = match msgs.get_mut(entry.msg_idx) {
                     Some(m) => m,
                     None => continue,
@@ -236,31 +359,14 @@ impl PiiPipeline {
 
                 match entry.part_idx {
                     None => {
-                        // Simple string content
-                        let text = content.as_str().unwrap_or("").to_string();
-                        let (replaced, detections) =
-                            replace_with_spans(&text, spans, locale, &mut vault);
-                        *content = serde_json::Value::String(replaced);
-                        all_detections.extend(detections);
+                        *content = serde_json::Value::String(final_text);
                         any_replaced = true;
                     }
                     Some(pi) => {
-                        // Anthropic-style multipart
                         if let Some(parts) = content.as_array_mut() {
                             if let Some(part) = parts.get_mut(pi) {
                                 if let Some(obj) = part.as_object_mut() {
-                                    let text = obj
-                                        .get("text")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let (replaced, detections) =
-                                        replace_with_spans(&text, spans, locale, &mut vault);
-                                    obj.insert(
-                                        "text".to_string(),
-                                        serde_json::Value::String(replaced),
-                                    );
-                                    all_detections.extend(detections);
+                                    obj.insert("text".to_string(), serde_json::Value::String(final_text));
                                     any_replaced = true;
                                 }
                             }
@@ -273,6 +379,8 @@ impl PiiPipeline {
         if !any_replaced {
             return None;
         }
+
+        tracing::info!(replacement_count = all_detections.len(), provider = provider.as_str(), "pipeline: request body processing complete");
 
         match serde_json::to_vec(&value) {
             Ok(bytes) => Some((bytes, all_detections)),
@@ -453,143 +561,6 @@ impl PiiPipeline {
         }
     }
 
-    /// T3 standalone fast-path: send each message text to the SLM for PII rewriting.
-    /// Vault is populated from the SLM's returned pairs. Tier 1 and Tier 2 are skipped.
-    async fn process_body_t3_standalone(
-        &self,
-        body: &[u8],
-        vault_handle: &VaultHandle,
-        provider: Provider,
-    ) -> Option<(Vec<u8>, Vec<PiiDetection>)> {
-        tracing::info!(body_len = body.len(), provider = provider.as_str(), "pii t3-standalone: processing request body");
-        let slm = self.slm.as_ref()?;
-
-        let text_str = match std::str::from_utf8(body) {
-            Ok(s) => s,
-            Err(_) => {
-                tracing::warn!("pii t3-standalone: request body is not valid UTF-8, skipping");
-                return None;
-            }
-        };
-
-        let mut value: serde_json::Value = match serde_json::from_str(text_str) {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(error = %e, "pii t3-standalone: failed to parse request body as JSON");
-                return None;
-            }
-        };
-
-        let messages_field = match provider {
-            Provider::Google => "contents",
-            _ => "messages",
-        };
-
-        let entries = collect_message_texts(&value, messages_field);
-        if entries.is_empty() {
-            return None;
-        }
-
-        // For each entry, call detect_and_rewrite (async, no vault lock held).
-        type RewriteResult = Option<(String, Vec<(String, String)>)>;
-        let mut rewrite_results: Vec<RewriteResult> = Vec::with_capacity(entries.len());
-        for entry in &entries {
-            tracing::debug!(msg_idx = entry.msg_idx, text_len = entry.text.len(), "pii t3-standalone: sending message text to SLM");
-            let result = slm.detect_and_rewrite(&entry.text).await;
-            if result.is_none() {
-                tracing::debug!(msg_idx = entry.msg_idx, text_len = entry.text.len(), "pii t3-standalone: SLM returned None for message text");
-            }
-            rewrite_results.push(result);
-        }
-
-        // Apply results: populate vault and rewrite JSON value (vault lock held briefly).
-        let mut all_detections: Vec<PiiDetection> = Vec::new();
-        let mut any_replaced = false;
-        {
-            let mut vault = vault_handle.write().unwrap();
-            let msgs = match value.get_mut(messages_field).and_then(|v| v.as_array_mut()) {
-                Some(a) => a,
-                None => return None,
-            };
-
-            for (i, entry) in entries.iter().enumerate() {
-                let result = match &rewrite_results[i] {
-                    Some(r) => r,
-                    None => continue,
-                };
-                let (rewritten, pairs) = result;
-                if pairs.is_empty() {
-                    continue;
-                }
-
-                // Populate vault: store original → §token§ so the inbound
-                // ReplacementBuffer can reverse them via AhoCorasick exact-match.
-                // Do NOT use SyntheticGenerator — it generates random names.
-                // The SLM chose §token§; we must store exactly that as the synthetic key.
-                for (original_span, token) in pairs {
-                    vault.add_mapping(
-                        original_span.clone(),
-                        token.clone(),
-                        &PiiType::Custom("T3".to_string()),
-                        3,
-                        1.0,
-                    );
-                    all_detections.push(PiiDetection {
-                        entity_type: "T3".to_string(),
-                        original: original_span.clone(),
-                        synthetic: token.clone(),
-                        tier: 3,
-                        confidence: 1.0,
-                        message_id: None,
-                    });
-                }
-
-                // Write back the SLM's rewritten text (already contains §token§ markers)
-                // into the JSON value.
-                let msg = match msgs.get_mut(entry.msg_idx) {
-                    Some(m) => m,
-                    None => continue,
-                };
-                let content = match msg.get_mut("content") {
-                    Some(c) => c,
-                    None => continue,
-                };
-                match entry.part_idx {
-                    None => {
-                        *content = serde_json::Value::String(rewritten.clone());
-                        any_replaced = true;
-                    }
-                    Some(pi) => {
-                        if let Some(parts) = content.as_array_mut() {
-                            if let Some(part) = parts.get_mut(pi) {
-                                if let Some(obj) = part.as_object_mut() {
-                                    obj.insert(
-                                        "text".to_string(),
-                                        serde_json::Value::String(rewritten.clone()),
-                                    );
-                                    any_replaced = true;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if !any_replaced {
-            return None;
-        }
-
-        tracing::info!(replacement_count = all_detections.len(), provider = provider.as_str(), "pii t3-standalone: request body processing complete");
-
-        match serde_json::to_vec(&value) {
-            Ok(bytes) => Some((bytes, all_detections)),
-            Err(e) => {
-                tracing::warn!(error = %e, "pii t3-standalone: failed to re-serialize request body");
-                None
-            }
-        }
-    }
 }
 
 /// Inject the `SYSTEM_REMINDER` block into the request body's system instruction field.
@@ -692,6 +663,7 @@ fn merge_spans(mut a: Vec<PiiSpan>, b: Vec<PiiSpan>) -> Vec<PiiSpan> {
 
 /// Apply a pre-computed span list to `text`, replacing each span with a synthetic value.
 /// Returns the modified text and a list of detections for WS event emission.
+#[cfg_attr(not(test), allow(dead_code))]
 fn replace_with_spans(
     text: &str,
     spans: &[PiiSpan],
@@ -724,6 +696,77 @@ fn replace_with_spans(
             });
             last = span.end;
         }
+    }
+    result.push_str(&text[last..]);
+    (result, detections)
+}
+
+/// Filter a span list by removing any span that overlaps with an exclusion zone.
+///
+/// A span `[s, e)` is accepted iff for all exclusion zones `[s_i, e_i)`:
+///   `e <= s_i  OR  s >= e_i`
+///
+/// Used in Stage 2 of the T3-first pipeline to skip positions already handled by T3.
+fn detect_spans_with_exclusions(spans: Vec<PiiSpan>, exclusion_zones: &[(usize, usize)]) -> Vec<PiiSpan> {
+    if exclusion_zones.is_empty() {
+        return spans;
+    }
+    spans
+        .into_iter()
+        .filter(|span| {
+            exclusion_zones
+                .iter()
+                .all(|&(s_i, e_i)| span.end <= s_i || span.start >= e_i)
+        })
+        .collect()
+}
+
+/// Apply a pre-computed Stage-2 span list to `text` using XML token format.
+///
+/// For each span, generates a `<pii id="TOKEN_ID">DISPLAY_VALUE</pii>` token where:
+/// - `TOKEN_ID` is derived from `conv_id` + `(base_index + span_position)`
+/// - `DISPLAY_VALUE` is the synthetic label produced by `SyntheticGenerator::get_or_create`
+///
+/// Inserts vault mappings for each replacement via `add_mapping_with_token_id`.
+/// Returns the modified text and a list of `PiiDetection` records.
+fn replace_with_spans_xml(
+    text: &str,
+    spans: &[PiiSpan],
+    locale: &Locale,
+    vault: &mut PiiVault,
+    conv_id: &str,
+    base_index: u64,
+) -> (String, Vec<PiiDetection>) {
+    let mut result = String::with_capacity(text.len());
+    let mut detections = Vec::new();
+    let mut last = 0usize;
+    for (i, span) in spans.iter().enumerate() {
+        if span.start < last || span.end > text.len() {
+            continue;
+        }
+        result.push_str(&text[last..span.start]);
+        let original = &text[span.start..span.end];
+        if vault.is_synthetic(original) {
+            result.push_str(original);
+            last = span.end;
+            continue;
+        }
+        // Generate display value (synthetic) and token_id for XML token.
+        let display_value = SyntheticGenerator::get_or_create(vault, original, &span.entity_type, locale, span.tier, span.confidence);
+        let token_id = vault::generate_token_id(conv_id, base_index + i as u64);
+        let xml = vault::xml_token(&token_id, &display_value);
+        // Insert into vault with full XML token index.
+        vault.add_mapping_with_token_id(original, &display_value, &token_id, &span.entity_type, span.tier, span.confidence);
+        result.push_str(&xml);
+        detections.push(PiiDetection {
+            entity_type: span.entity_type.label().to_string(),
+            original: original.to_string(),
+            synthetic: display_value,
+            tier: span.tier,
+            confidence: span.confidence,
+            message_id: None,
+        });
+        last = span.end;
     }
     result.push_str(&text[last..]);
     (result, detections)
@@ -1455,10 +1498,10 @@ mod tests {
         assert_eq!(value, original, "Google provider must leave value unchanged");
     }
 
-    /// PiiPipeline::new with T3 standalone tiers sets slm_standalone = true
-    /// and tier2 = None.
+    /// PiiPipeline::new with T3-only tiers (regex=false, ner=false, slm=true):
+    /// slm must be Some and tier2 must be None.
     #[test]
-    fn pipeline_slm_standalone_flag_true_and_tier2_none() {
+    fn pipeline_t3_only_tier_matrix_routing_in_mod() {
         use crate::config::PiiConfig;
         let mut cfg = PiiConfig::default();
         cfg.tiers.regex = false;
@@ -1466,17 +1509,16 @@ mod tests {
         cfg.tiers.slm = true;
         cfg.slm.endpoint = "http://127.0.0.1:16442".to_string();
         let pipeline = PiiPipeline::new(&cfg);
-        assert!(pipeline.slm_standalone,
-            "slm_standalone must be true when tiers = {{regex:false, ner:false, slm:true}}");
-        assert!(pipeline.tier2.is_none(),
-            "tier2 must be None in T3 standalone mode");
         assert!(pipeline.slm.is_some(),
-            "slm sidecar must be Some when endpoint is non-empty and slm=true");
+            "slm must be Some when tiers.slm=true and endpoint non-empty");
+        assert!(pipeline.tier2.is_none(),
+            "tier2 must be None when tiers.ner=false");
     }
 
-    /// PiiPipeline::new with full stack tiers sets slm_standalone = false.
+    /// PiiPipeline::new with full-stack tiers (regex=true, ner=true, slm=true):
+    /// slm must be Some.
     #[test]
-    fn pipeline_full_stack_slm_standalone_false() {
+    fn pipeline_full_stack_slm_is_some() {
         use crate::config::PiiConfig;
         let mut cfg = PiiConfig::default();
         cfg.tiers.regex = true;
@@ -1484,8 +1526,69 @@ mod tests {
         cfg.tiers.slm = true;
         cfg.slm.endpoint = "http://127.0.0.1:16442".to_string();
         let pipeline = PiiPipeline::new(&cfg);
-        assert!(!pipeline.slm_standalone,
-            "slm_standalone must be false when full stack is enabled");
+        assert!(pipeline.slm.is_some(),
+            "slm must be Some when tiers.slm=true and endpoint non-empty");
+    }
+
+    // ── detect_spans_with_exclusions tests ────────────────────────────────────
+
+    /// Spans that don't overlap any exclusion zone are preserved unchanged.
+    #[test]
+    fn detect_spans_with_exclusions_no_overlap_keeps_all() {
+        let spans = vec![
+            PiiSpan { start: 0,  end: 5,  entity_type: PiiType::Email, confidence: 1.0, tier: 1 },
+            PiiSpan { start: 10, end: 15, entity_type: PiiType::Ssn,   confidence: 1.0, tier: 1 },
+        ];
+        // Exclusion zone [20, 30) does not touch either span.
+        let result = detect_spans_with_exclusions(spans, &[(20, 30)]);
+        assert_eq!(result.len(), 2, "both spans must be kept when exclusion zone is elsewhere");
+    }
+
+    /// A span that fully overlaps an exclusion zone is removed.
+    #[test]
+    fn detect_spans_with_exclusions_fully_overlapping_removed() {
+        let spans = vec![
+            PiiSpan { start: 5, end: 10, entity_type: PiiType::Email, confidence: 1.0, tier: 1 },
+        ];
+        // Exclusion zone [0, 20) fully covers the span [5, 10).
+        let result = detect_spans_with_exclusions(spans, &[(0, 20)]);
+        assert!(result.is_empty(), "span fully inside exclusion zone must be removed");
+    }
+
+    /// A span that partially overlaps an exclusion zone is also removed.
+    #[test]
+    fn detect_spans_with_exclusions_partial_overlap_removed() {
+        let spans = vec![
+            PiiSpan { start: 8, end: 15, entity_type: PiiType::Phone, confidence: 1.0, tier: 1 },
+        ];
+        // Exclusion zone [0, 10) overlaps [8, 15) in [8, 10).
+        let result = detect_spans_with_exclusions(spans, &[(0, 10)]);
+        assert!(result.is_empty(), "span partially overlapping exclusion zone must be removed");
+    }
+
+    /// Empty exclusion list: all spans pass through unchanged.
+    #[test]
+    fn detect_spans_with_exclusions_empty_zones_passthrough() {
+        let spans = vec![
+            PiiSpan { start: 0, end: 5, entity_type: PiiType::Email, confidence: 1.0, tier: 1 },
+        ];
+        let result = detect_spans_with_exclusions(spans.clone(), &[]);
+        assert_eq!(result.len(), 1, "no exclusion zones: all spans must pass through");
+    }
+
+    /// Mixed: some spans overlap exclusion zones, others don't.
+    #[test]
+    fn detect_spans_with_exclusions_mixed_keeps_non_overlapping() {
+        let spans = vec![
+            PiiSpan { start: 0,  end: 5,  entity_type: PiiType::Email, confidence: 1.0, tier: 1 }, // kept
+            PiiSpan { start: 10, end: 20, entity_type: PiiType::Phone, confidence: 1.0, tier: 1 }, // removed
+            PiiSpan { start: 25, end: 30, entity_type: PiiType::Ssn,   confidence: 1.0, tier: 1 }, // kept
+        ];
+        // Exclusion zone [10, 20) covers the second span exactly.
+        let result = detect_spans_with_exclusions(spans, &[(10, 20)]);
+        assert_eq!(result.len(), 2, "only the non-overlapping spans must remain");
+        assert_eq!(result[0].start, 0,  "first span must be the email at offset 0");
+        assert_eq!(result[1].start, 25, "second span must be the SSN at offset 25");
     }
 
     /// Performance: process_request_body on a 182-turn conversation must finish under 100 ms,
