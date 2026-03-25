@@ -402,26 +402,25 @@ fn disable_ner_if_model_missing(cfg: &mut Config) {
 
 /// Enforce PII tier dependency rules.
 ///
-/// Allowed combinations:
-///   - Any subset where each tier's dependencies are satisfied.
-///   - T3 standalone: `{regex:false, ner:false, slm:true}` — SLM runs without T1/T2.
+/// Allowed combinations per activation matrix:
+///   - T1 only: `{regex:true, ner:false, slm:false}`
+///   - T1+T2: `{regex:true, ner:true, slm:false}`
+///   - T3 only: `{regex:false, ner:false, slm:true}`
+///   - T3+T1: `{regex:true, ner:false, slm:true}`
+///   - T3+T1+T2: `{regex:true, ner:true, slm:true}`
+///
+/// Invalid: T2 without T1 (`{regex:false, ner:true, ...}`).
 fn validate_pii_tiers(tiers: &PiiTiersConfig) -> anyhow::Result<()> {
-    // Tier 2 (NER) always requires Tier 1 (regex), even in standalone paths.
+    // Tier 2 (NER) always requires Tier 1 (regex).
     if tiers.ner && !tiers.regex {
         anyhow::bail!("pii.tiers.ner requires pii.tiers.regex = true (Tier 2 depends on Tier 1)");
-    }
-    // Tier 3 (SLM) requires both T1 and T2 when not in standalone mode.
-    // Standalone ({regex:false, ner:false, slm:true}) is explicitly allowed.
-    if tiers.slm && !is_t3_standalone(tiers) && (!tiers.regex || !tiers.ner) {
-        anyhow::bail!(
-            "pii.tiers.slm requires pii.tiers.regex = true and pii.tiers.ner = true (Tier 3 depends on Tier 1 + Tier 2)"
-        );
     }
     Ok(())
 }
 
 /// Returns `true` when Tier 3 standalone mode is active: SLM enabled with
 /// both Tier 1 (regex) and Tier 2 (NER) disabled.
+#[cfg_attr(not(test), allow(dead_code))]
 pub fn is_t3_standalone(tiers: &PiiTiersConfig) -> bool {
     tiers.slm && !tiers.regex && !tiers.ner
 }
@@ -490,14 +489,28 @@ mod tests {
 
     #[tokio::test]
     async fn patch_tier3_without_tier2_is_error() {
-        // {regex:true, ner:false, slm:true} — T3 present but T2 absent, T1 present.
-        // This must be rejected by the T3-depends-on-T1+T2 rule (validate_pii_tiers line ~403).
+        // {regex:false, ner:true, slm:false} — T2 without T1. Must be rejected.
         let mgr = default_mgr();
         let err = mgr
-            .patch(serde_json::json!({ "pii": { "tiers": { "regex": true, "ner": false, "slm": true } } }))
+            .patch(serde_json::json!({ "pii": { "tiers": { "regex": false, "ner": true, "slm": false } } }))
             .await
             .unwrap_err();
-        assert!(err.to_string().contains("Tier 3 depends on Tier 1 + Tier 2"));
+        assert!(err.to_string().contains("Tier 2 depends on Tier 1"));
+    }
+
+    #[tokio::test]
+    async fn patch_tier3_plus_t1_no_t2_is_valid() {
+        // {regex:true, ner:false, slm:true} — T3+T1 without T2. Must be valid per new activation matrix.
+        let mgr = default_mgr();
+        let result = mgr
+            .patch(serde_json::json!({ "pii": { "tiers": { "regex": true, "ner": false, "slm": true } } }))
+            .await
+            .unwrap();
+        assert!(result.ok, "T3+T1 without T2 must be valid");
+        let cfg = mgr.get().await;
+        assert!(cfg.pii.tiers.slm);
+        assert!(cfg.pii.tiers.regex);
+        assert!(!cfg.pii.tiers.ner);
     }
 
     #[tokio::test]

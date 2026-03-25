@@ -1,11 +1,21 @@
 use crate::pii::vault::VaultHandle;
 use std::collections::HashSet;
 
+// Byte sequence that triggers XML-token holdback.
+const XML_TOKEN_OPEN: &[u8] = b"<pii";
+const XML_TOKEN_CLOSE: &[u8] = b"</pii>";
+
 /// Streaming reverse-replacement buffer for SSE text deltas.
 ///
 /// Receives incoming text chunks (extracted from SSE envelopes), applies
 /// synthetic→original replacements, and flushes the safe prefix while
 /// holding back a trailing window that might be the start of a synthetic token.
+///
+/// Two holdback paths:
+///   - XML-token path: when `<pii` is found, hold until `</pii>` is complete,
+///     then apply the cascade matcher (Levels 1–4) before flushing.
+///   - Display-value path (Level 5): Aho-Corasick over bare display values,
+///     triggered by 2-byte prefix matching.
 ///
 /// Zero latency when the vault is empty.
 pub struct ReplacementBuffer {
@@ -51,6 +61,7 @@ impl ReplacementBuffer {
         let current_count = vault.mapping_count();
         if current_count != self.cached_mapping_count {
             let old_count = self.cached_mapping_count;
+            // Only include display-value prefixes, never XML-token prefixes (task 6.4).
             self.trigger_prefixes = vault.synthetic_key_prefixes().collect();
             self.cached_mapping_count = current_count;
             tracing::trace!(
@@ -69,18 +80,20 @@ impl ReplacementBuffer {
 
         let max_key_len = vault.max_synthetic_key_len;
 
-        // Apply all replacements to the buffer first.
-        tracing::trace!(buffer_len = self.buffer.len(), max_key_len, "buffer: calling replace_synthetics");
-        let (replaced, _any) = vault.replace_synthetics(&self.buffer);
+        // ── XML-token holdback (task 6.1): scan for `<pii` in the buffer.
+        // If a complete `<pii ...>...</pii>` token is present, apply the cascade
+        // matcher before continuing. If only a partial token is present, hold back
+        // up to the `<pii` start position so we don't flush a split token.
+        let xml_processed = apply_xml_token_cascade(&self.buffer, &vault);
         drop(vault);
 
         // Compute safe flush window: buffer minus trailing max_key_len bytes,
         // but only hold back if the tail contains a trigger char.
-        let safe_len = compute_safe_flush_len(&replaced, max_key_len, &self.trigger_prefixes);
+        let safe_len = compute_safe_flush_len(&xml_processed, max_key_len, &self.trigger_prefixes);
 
         if safe_len == 0 {
             // Hold entire replaced buffer — keep it for next chunk.
-            self.buffer = replaced;
+            self.buffer = xml_processed;
             tracing::debug!(
                 incoming_len = incoming.len(),
                 flushed_len = 0usize,
@@ -91,8 +104,8 @@ impl ReplacementBuffer {
         }
 
         // Split at a character boundary using get() — never panics.
-        let flush_to = find_char_boundary(&replaced, safe_len);
-        match (replaced.get(..flush_to), replaced.get(flush_to..)) {
+        let flush_to = find_char_boundary(&xml_processed, safe_len);
+        match (xml_processed.get(..flush_to), xml_processed.get(flush_to..)) {
             (Some(flushed), Some(remaining)) => {
                 let flushed = flushed.to_string();
                 self.buffer = remaining.to_string();
@@ -106,7 +119,7 @@ impl ReplacementBuffer {
             }
             _ => {
                 // flush_to landed off a char boundary (shouldn't happen) — hold everything.
-                self.buffer = replaced;
+                self.buffer = xml_processed;
                 tracing::debug!(
                     incoming_len = incoming.len(),
                     flushed_len = 0usize,
@@ -125,20 +138,170 @@ impl ReplacementBuffer {
             return String::new();
         }
         let vault = self.vault.read().unwrap();
-        let (replaced, _) = vault.replace_synthetics(&self.buffer);
+        // Apply XML-token cascade (includes Level-5 replacement for non-XML segments).
+        let replaced = apply_xml_token_cascade(&self.buffer, &vault);
         drop(vault);
         self.buffer.clear();
         replaced
     }
 }
 
+// ── XML-token cascade (tasks 6.1–6.4) ────────────────────────────────────────
+
+/// Apply the XML-token cascade matcher to `text`.
+///
+/// Scans for complete `<pii id="...">...</pii>` tokens and reverses each one
+/// to its original PII value using a four-level cascade:
+///   L1: exact full-token lookup in `vault.full_token_to_original`
+///   L2: extract token_id, call `vault.get_by_token_id`
+///   L3: extract display value, call `vault.get_by_display_value`
+///   L4: no match — log WARN and pass token through unchanged (Part II stub)
+///
+/// Partial `<pii` sequences that have no matching `</pii>` are left in place
+/// so the caller can hold them back for the next chunk.
+///
+/// Level-5 Aho-Corasick over display values is applied separately in
+/// `flush_remaining` / the standard `replace_synthetics` call; it is NOT
+/// applied here to avoid double-processing.
+fn apply_xml_token_cascade(text: &str, vault: &crate::pii::vault::PiiVault) -> String {
+    // Fast path: no `<pii` at all.
+    if !text.as_bytes().windows(XML_TOKEN_OPEN.len()).any(|w| w == XML_TOKEN_OPEN) {
+        // No XML tokens present — apply standard Level-5 replacement and return.
+        let (replaced, _) = vault.replace_synthetics(text);
+        return replaced;
+    }
+
+    let mut result = String::with_capacity(text.len());
+    let mut pos = 0usize;
+
+    while pos < text.len() {
+        // Find next `<pii` from current position.
+        let open_pos = match find_subsequence(text.as_bytes(), pos, XML_TOKEN_OPEN) {
+            Some(p) => p,
+            None => {
+                // No more XML tokens — flush remainder via Level-5 replacement.
+                let tail = &text[pos..];
+                let (replaced_tail, _) = vault.replace_synthetics(tail);
+                result.push_str(&replaced_tail);
+                break;
+            }
+        };
+
+        // Flush text before this token via Level-5 replacement.
+        if open_pos > pos {
+            let prefix = &text[pos..open_pos];
+            let (replaced_prefix, _) = vault.replace_synthetics(prefix);
+            result.push_str(&replaced_prefix);
+        }
+
+        // Find the matching `</pii>` close tag.
+        let close_pos = match find_subsequence(text.as_bytes(), open_pos, XML_TOKEN_CLOSE) {
+            Some(p) => p,
+            None => {
+                // Incomplete token — leave from `open_pos` onwards in buffer (hold back).
+                result.push_str(&text[open_pos..]);
+                break;
+            }
+        };
+
+        let token_end = close_pos + XML_TOKEN_CLOSE.len();
+        let full_token = &text[open_pos..token_end];
+
+        tracing::debug!(
+            token_len = full_token.len(),
+            "buffer: cascade: found complete XML token"
+        );
+
+        // ── Level 1: exact full-token lookup ──────────────────────────────────
+        if let Some(original) = vault.full_token_to_original.get(full_token) {
+            tracing::debug!(level = 1, "buffer: cascade: L1 hit");
+            result.push_str(original);
+            pos = token_end;
+            continue;
+        }
+
+        // ── Level 2: extract id="TOKEN_ID", lookup by token_id ────────────────
+        if let Some(token_id) = extract_xml_attr(full_token, "id") {
+            if let Some(original) = vault.get_by_token_id(&token_id) {
+                tracing::debug!(level = 2, "buffer: cascade: L2 hit");
+                result.push_str(original);
+                pos = token_end;
+                continue;
+            }
+
+            // ── Level 3: extract inner text (display value), lookup ────────────
+            if let Some(display_value) = extract_xml_inner(full_token) {
+                if let Some(original) = vault.get_by_display_value(&display_value) {
+                    tracing::debug!(level = 3, "buffer: cascade: L3 hit");
+                    result.push_str(original);
+                    pos = token_end;
+                    continue;
+                }
+            }
+        }
+
+        // ── Level 4: no match — stub (Part II) ────────────────────────────────
+        tracing::warn!(
+            token = full_token,
+            "buffer: cascade Level 4 (hypothesis match) not yet implemented; passing token through"
+        );
+        result.push_str(full_token);
+        pos = token_end;
+    }
+
+    result
+}
+
+/// Find the byte offset of `needle` in `haystack[start..]`, returning an absolute offset.
+fn find_subsequence(haystack: &[u8], start: usize, needle: &[u8]) -> Option<usize> {
+    if needle.is_empty() || haystack.len() < start + needle.len() {
+        return None;
+    }
+    haystack[start..]
+        .windows(needle.len())
+        .position(|w| w == needle)
+        .map(|p| start + p)
+}
+
+/// Extract an XML attribute value: `attr="value"` from a string like `<pii id="abc123">...`.
+/// Returns the value without quotes.
+fn extract_xml_attr<'a>(token: &'a str, attr: &str) -> Option<String> {
+    let search = format!("{}=\"", attr);
+    let start = token.find(&search)? + search.len();
+    let end = token[start..].find('"')?;
+    Some(token[start..start + end].to_string())
+}
+
+/// Extract the inner text content from `<pii id="...">INNER</pii>`.
+fn extract_xml_inner(token: &str) -> Option<String> {
+    // Find the end of the opening tag `>`.
+    let open_end = token.find('>')?;
+    let inner_start = open_end + 1;
+    // Find the start of the closing tag `</pii>`.
+    let close_start = token.rfind("</")?;
+    if close_start < inner_start {
+        return None;
+    }
+    Some(token[inner_start..close_start].to_string())
+}
+
 /// Compute how many bytes from the front of `text` are safe to flush.
 ///
 /// Holds back a trailing window of `max_key_len` bytes (adjusted to a char
 /// boundary) whenever that window contains a synthetic-token trigger prefix.
+/// Also holds back from any partial `<pii` sequence found in the tail that
+/// has no matching `</pii>` close tag — so split XML tokens are never flushed.
+///
 /// Returns `text.len()` when nothing needs to be held back, or `0` when the
 /// entire buffer is shorter than `max_key_len` and contains a trigger.
 fn compute_safe_flush_len(text: &str, max_key_len: usize, prefixes: &HashSet<[u8; 2]>) -> usize {
+    // Check for a partial `<pii` in the text that has no matching `</pii>`.
+    // If found, hold back from the start of that partial open tag.
+    if let Some(xml_holdback) = xml_token_holdback_pos(text) {
+        tracing::trace!(safe_len = xml_holdback, replaced_len = text.len(), xml_holdback = true, "buffer: holdback decision (xml partial)");
+        return xml_holdback;
+    }
+
     if text.len() > max_key_len {
         let tail_start = find_char_boundary(text, text.len() - max_key_len);
         let tail = text.get(tail_start..).unwrap_or(text);
@@ -150,6 +313,30 @@ fn compute_safe_flush_len(text: &str, max_key_len: usize, prefixes: &HashSet<[u8
         let has_trigger = has_prefix_match(text.as_bytes(), prefixes);
         tracing::trace!(safe_len = 0usize, replaced_len = text.len(), has_trigger, "buffer: holdback decision");
         if has_trigger { 0 } else { text.len() }
+    }
+}
+
+/// If `text` contains a `<pii` sequence that has no matching `</pii>` close tag,
+/// return the byte offset of the last such partial open tag (safe flush boundary).
+/// Returns `None` if no partial XML token is present.
+fn xml_token_holdback_pos(text: &str) -> Option<usize> {
+    let bytes = text.as_bytes();
+    // Find the last occurrence of `<pii` in the text.
+    let last_open = bytes
+        .windows(XML_TOKEN_OPEN.len())
+        .enumerate()
+        .filter(|(_, w)| *w == XML_TOKEN_OPEN)
+        .map(|(i, _)| i)
+        .last()?;
+
+    // Check if there is a `</pii>` after this `<pii`.
+    let has_close = find_subsequence(bytes, last_open, XML_TOKEN_CLOSE).is_some();
+    if has_close {
+        // Complete token — no holdback needed for this one.
+        None
+    } else {
+        // Partial token: hold back from `last_open`.
+        Some(last_open)
     }
 }
 
@@ -474,6 +661,130 @@ mod tests {
             !accumulated.contains("SYN_TOK"),
             "synthetic still present after char-by-char feed: {:?}",
             accumulated
+        );
+    }
+
+    // ── Group 6: XML-token cascade tests (tasks 6.1–6.5) ─────────────────────
+
+    fn make_vault_with_token_id(
+        original: &str,
+        display_value: &str,
+        token_id: &str,
+    ) -> VaultHandle {
+        let mut vault = PiiVault::new("test-cascade");
+        vault.add_mapping_with_token_id(
+            original,
+            display_value,
+            token_id,
+            &PiiType::Email,
+            3,
+            1.0,
+        );
+        Arc::new(RwLock::new(vault))
+    }
+
+    /// L1: exact full-token match reverses to original.
+    #[test]
+    fn buffer_xml_token_reversed_level1() {
+        let vault = make_vault_with_token_id("alice@acme.com", "synth@example.com", "a3f9b2c1");
+        let mut buf = ReplacementBuffer::new(vault);
+        let token = r#"<pii id="a3f9b2c1">synth@example.com</pii>"#;
+        let out = buf.process_delta(token);
+        let remaining = buf.flush_remaining();
+        let full = format!("{out}{remaining}");
+        assert_eq!(full, "alice@acme.com", "L1: expected original, got: {full:?}");
+    }
+
+    /// L2: token_id matches but full token string differs — still reverses to original.
+    #[test]
+    fn buffer_xml_token_reversed_level2() {
+        // Insert mapping so only token_id_to_original is populated (not full_token).
+        // We simulate this by inserting a different display_value in the full token.
+        let original = "bob@corp.com";
+        let display = "synth_bob@example.com";
+        let tid = "b1c2d3e4";
+        let vault = make_vault_with_token_id(original, display, tid);
+        let _buf = ReplacementBuffer::new(vault);
+        // Use the correct token_id but a display value that won't match L1 exactly
+        // because we provide the *correct* XML token here — L1 will hit.
+        // To specifically test L2, we need to delete the L1 entry.
+        // Strategy: build vault manually with only token_id_to_original populated.
+        let mut v2 = PiiVault::new("test-l2");
+        v2.add_mapping_with_token_id(original, display, tid, &PiiType::Email, 3, 1.0);
+        // Remove from full_token_to_original to force L2 path.
+        let full_key = format!(r#"<pii id="{tid}">{display}</pii>"#);
+        v2.full_token_to_original.remove(&full_key);
+        let handle = Arc::new(RwLock::new(v2));
+        let mut buf2 = ReplacementBuffer::new(handle);
+        let token = format!(r#"<pii id="{tid}">{display}</pii>"#);
+        let out = buf2.process_delta(&token);
+        let remaining = buf2.flush_remaining();
+        let full = format!("{out}{remaining}");
+        assert_eq!(full, original, "L2: expected original, got: {full:?}");
+    }
+
+    /// L3: display value matches (no token_id match) — reverses to original.
+    #[test]
+    fn buffer_xml_token_reversed_level3() {
+        let original = "carol@corp.com";
+        let display = "synth_carol@example.com";
+        let tid = "c1d2e3f4";
+        let mut v = PiiVault::new("test-l3");
+        v.add_mapping_with_token_id(original, display, tid, &PiiType::Email, 3, 1.0);
+        // Remove L1 and L2 entries to force L3 path.
+        let full_key = format!(r#"<pii id="{tid}">{display}</pii>"#);
+        v.full_token_to_original.remove(&full_key);
+        v.token_id_to_original.remove(tid);
+        let handle = Arc::new(RwLock::new(v));
+        let mut buf = ReplacementBuffer::new(handle);
+        let token = format!(r#"<pii id="{tid}">{display}</pii>"#);
+        let out = buf.process_delta(&token);
+        let remaining = buf.flush_remaining();
+        let full = format!("{out}{remaining}");
+        assert_eq!(full, original, "L3: expected original, got: {full:?}");
+    }
+
+    /// L4: no match at any level — token passed through unchanged, WARN logged.
+    #[test]
+    fn buffer_xml_token_passthrough_level4() {
+        // Vault has no entries matching this token.
+        let vault = Arc::new(RwLock::new(PiiVault::new("test-l4")));
+        let mut buf = ReplacementBuffer::new(vault);
+        let token = r#"<pii id="xxxxxxxx">unknown@example.com</pii>"#;
+        let out = buf.process_delta(token);
+        let remaining = buf.flush_remaining();
+        let full = format!("{out}{remaining}");
+        // Token is passed through unchanged (Level 4 stub).
+        assert_eq!(full, token, "L4: token must pass through unchanged, got: {full:?}");
+    }
+
+    /// Split: `<pii` arrives in one chunk, `</pii>` in the next — must still reverse.
+    #[test]
+    fn buffer_xml_token_split_across_chunks() {
+        let vault = make_vault_with_token_id("dave@acme.com", "synth_dave@example.com", "d1e2f3a4");
+        let mut buf = ReplacementBuffer::new(vault);
+        // Split the token across two chunks.
+        let token = r#"<pii id="d1e2f3a4">synth_dave@example.com</pii>"#;
+        let mid = token.len() / 2;
+        let chunk1 = &token[..mid];
+        let chunk2 = &token[mid..];
+        let out1 = buf.process_delta(chunk1);
+        let out2 = buf.process_delta(chunk2);
+        let remaining = buf.flush_remaining();
+        let full = format!("{out1}{out2}{remaining}");
+        assert_eq!(full, "dave@acme.com", "split token: expected original, got: {full:?}");
+    }
+
+    /// Trigger prefixes must NOT contain `[b'<', b'p']` after vault insert.
+    #[test]
+    fn buffer_trigger_prefixes_no_xml_prefix() {
+        let vault = make_vault_with_token_id("eve@acme.com", "synth_eve@example.com", "e1f2a3b4");
+        let v = vault.read().unwrap();
+        // Ensure synthetic_key_prefixes does not include ['<', 'p'].
+        let prefixes: HashSet<[u8; 2]> = v.synthetic_key_prefixes().collect();
+        assert!(
+            !prefixes.contains(&[b'<', b'p']),
+            "trigger prefixes must not include [b'<', b'p'], got: {prefixes:?}"
         );
     }
 }
