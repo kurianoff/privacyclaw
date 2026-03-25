@@ -413,9 +413,13 @@ async fn finalize_response(
                 if vault.is_empty() {
                     None
                 } else {
-                    let records: Vec<(String, String, String, u8, f32)> = vault
-                        .quints()
-                        .map(|(o, s, t, tier, conf)| (o.to_string(), s.to_string(), t.to_string(), tier, conf))
+                    let records: Vec<(String, String, String, u8, f32, String, String)> = vault
+                        .to_records()
+                        .into_iter()
+                        .map(|r| (
+                            r.original, r.synthetic, r.pii_type.label().to_string(),
+                            r.tier, r.confidence, r.token_id, r.display_value,
+                        ))
                         .collect();
                     Some((vault.rng_seed, records))
                 }

@@ -17,8 +17,8 @@ fn vault_save_and_load() {
     store.insert_conversation(&conv).unwrap();
 
     let records = vec![
-        ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32),
-        ("123-45-6789".to_string(), "987-65-4321".to_string(), "ssn".to_string(), 1u8, 1.0f32),
+        ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32, String::new(), String::new()),
+        ("123-45-6789".to_string(), "987-65-4321".to_string(), "ssn".to_string(), 1u8, 1.0f32, String::new(), String::new()),
     ];
     store.save_vault("conv-persist-test", 42, &records).unwrap();
 

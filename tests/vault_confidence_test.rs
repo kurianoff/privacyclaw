@@ -143,6 +143,8 @@ fn stored_vault_record_with_confidence_round_trips() {
         pii_type: "email".to_string(),
         tier: Some(2),
         confidence: Some(0.88),
+        token_id: None,
+        display_value: None,
     };
     let json = serde_json::to_string(&rec).unwrap();
 
@@ -166,6 +168,8 @@ fn stored_vault_record_none_fields_omitted_from_json() {
         pii_type: "email".to_string(),
         tier: None,
         confidence: None,
+        token_id: None,
+        display_value: None,
     };
     let json = serde_json::to_string(&rec).unwrap();
 
@@ -180,10 +184,10 @@ fn stored_vault_record_none_fields_omitted_from_json() {
 fn confidence_round_trips_through_storage() {
     let (store, _dir, conv_id) = make_store_with_conv("conf-storage");
 
-    let mappings: Vec<(String, String, String, u8, f32)> = vec![
-        ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1, 0.99),
-        ("555-123-4567".to_string(),   "555-000-0001".to_string(),    "phone".to_string(), 1, 0.85),
-        ("123-45-6789".to_string(),    "999-00-0001".to_string(),     "ssn".to_string(),   2, 0.72),
+    let mappings: Vec<(String, String, String, u8, f32, String, String)> = vec![
+        ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1, 0.99, String::new(), String::new()),
+        ("555-123-4567".to_string(),   "555-000-0001".to_string(),    "phone".to_string(), 1, 0.85, String::new(), String::new()),
+        ("123-45-6789".to_string(),    "999-00-0001".to_string(),     "ssn".to_string(),   2, 0.72, String::new(), String::new()),
     ];
 
     store.save_vault(&conv_id, 777, &mappings).unwrap();
@@ -192,7 +196,7 @@ fn confidence_round_trips_through_storage() {
     assert_eq!(seed, 777);
     assert_eq!(records.len(), 3);
 
-    for (orig, _synth, pii_type, expected_tier, expected_conf) in &mappings {
+    for (orig, _synth, pii_type, expected_tier, expected_conf, _, _) in &mappings {
         let rec = records.iter().find(|r| &r.original == orig)
             .unwrap_or_else(|| panic!("record for {} not found", orig));
         assert_eq!(rec.pii_type, *pii_type);
@@ -211,9 +215,9 @@ fn confidence_round_trips_through_storage() {
 fn confidence_end_to_end_vault_restore() {
     let (store, _dir, conv_id) = make_store_with_conv("conf-e2e");
 
-    let mappings: Vec<(String, String, String, u8, f32)> = vec![
-        ("real@corp.com".to_string(), "fake@example.com".to_string(), "email".to_string(), 1, 0.95),
-        ("John Doe".to_string(),      "Jane Smith".to_string(),       "person_name".to_string(), 2, 0.80),
+    let mappings: Vec<(String, String, String, u8, f32, String, String)> = vec![
+        ("real@corp.com".to_string(), "fake@example.com".to_string(), "email".to_string(), 1, 0.95, String::new(), String::new()),
+        ("John Doe".to_string(),      "Jane Smith".to_string(),       "person_name".to_string(), 2, 0.80, String::new(), String::new()),
     ];
     store.save_vault(&conv_id, 999, &mappings).unwrap();
 
@@ -251,6 +255,8 @@ fn none_confidence_in_stored_record_maps_to_zero_in_from_records() {
         pii_type: "email".to_string(),
         tier: None,    // legacy: no tier stored
         confidence: None,  // legacy: no confidence stored
+        token_id: None,
+        display_value: None,
     };
 
     // Replicate the mapping done in vault.rs get_or_create_with_store.

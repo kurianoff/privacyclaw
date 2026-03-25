@@ -174,7 +174,7 @@ fn vault_line_not_confused_with_detection_line() {
     store.save_vault(
         "conv-mixed",
         42,
-        &[("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32)],
+        &[("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32, String::new(), String::new())],
     ).unwrap();
 
     // Write a detection line.

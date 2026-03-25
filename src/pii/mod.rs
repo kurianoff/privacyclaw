@@ -196,6 +196,9 @@ impl PiiPipeline {
             return None;
         }
 
+        // Read conv_id once from vault before any async work (avoids repeated lock acquisition).
+        let conv_id = vault_handle.read().unwrap().conversation_id().to_string();
+
         let has_t3 = self.slm.is_some();
         // T1 (regex) always available; T2 (NER) optional. Stage 2 runs if either is in scope.
         let has_t1t2 = true; // Tier 1 is always compiled in; Tier 2 gates on self.tier2.is_some()
@@ -203,7 +206,8 @@ impl PiiPipeline {
         // ── Phase 2: per-entry T3 → T1/T2 pipeline (async, no vault lock) ────
         struct EntryResult {
             replaced_text: String,
-            stage1_spans: Vec<(usize, usize, String, String)>, // (start, end, display_value, pii_type)
+            // (start, end, display_value, pii_type, original_text)
+            stage1_spans: Vec<(usize, usize, String, String, String)>,
             stage2_spans: Vec<PiiSpan>,
         }
 
@@ -216,7 +220,7 @@ impl PiiPipeline {
             let (working_text, stage1_spans, exclusion_zones) = if has_t3 {
                 let slm = self.slm.as_ref().unwrap();
                 let base_index = vault_handle.read().unwrap().mapping_count() as u64;
-                match slm.replace(text, "conv", base_index).await {
+                match slm.replace(text, &conv_id, base_index).await {
                     Some(resp) if !resp.replacements.is_empty() => {
                         // Reconstruct modified text right-to-left for correct byte offsets.
                         let mut sorted = resp.replacements;
@@ -224,20 +228,23 @@ impl PiiPipeline {
                         let mut result_text = text.clone();
                         let mut excl_zones: Vec<(usize, usize)> = Vec::new();
                         // Right-to-left substitution to preserve earlier offsets.
-                        let mut spans_info: Vec<(usize, usize, String, String)> = Vec::new();
+                        // Tuple: (start, end, display_value, pii_type, original_text)
+                        let mut spans_info: Vec<(usize, usize, String, String, String)> = Vec::new();
                         for r in sorted.iter().rev() {
                             if r.start > r.end || r.end > result_text.len() { continue; }
+                            // Capture original text before replace_range mutates the string.
+                            // Safe because we iterate right-to-left so earlier offsets are still valid.
+                            let original_text = result_text[r.start..r.end].to_string();
                             // Generate token_id based on base_index + position-in-sorted
                             let idx = sorted.iter().position(|x| x.start == r.start).unwrap_or(0);
-                            let conv_id = "conv"; // placeholder; real conv_id not available here
-                            let token_id = vault::generate_token_id(conv_id, base_index + idx as u64);
+                            let token_id = vault::generate_token_id(&conv_id, base_index + idx as u64);
                             let xml = vault::xml_token(&token_id, &r.display_value);
                             result_text.replace_range(r.start..r.end, &xml);
-                            spans_info.push((r.start, r.start + xml.len(), r.display_value.clone(), r.pii_type.clone()));
+                            spans_info.push((r.start, r.start + xml.len(), r.display_value.clone(), r.pii_type.clone(), original_text));
                         }
                         // Recompute exclusion zones after all right-to-left substitutions.
                         // They are the positions of the xml tokens in the result text.
-                        for (s, e, _, _) in &spans_info {
+                        for (s, e, _, _, _) in &spans_info {
                             excl_zones.push((*s, *e));
                         }
                         tracing::info!(
@@ -308,12 +315,11 @@ impl PiiPipeline {
                 // Stage 2 spans need both text replacement and vault inserts.
 
                 // Vault-insert Stage 1 spans.
-                let conv_id = "conv"; // placeholder
-                for (j, (_, _, display_val, pii_type_str)) in result.stage1_spans.iter().enumerate() {
-                    let token_id = vault::generate_token_id(conv_id, base_index + j as u64);
+                for (j, (_, _, display_val, pii_type_str, original_text)) in result.stage1_spans.iter().enumerate() {
+                    let token_id = vault::generate_token_id(&conv_id, base_index + j as u64);
                     let pii_type = PiiType::Custom(pii_type_str.clone());
                     vault.add_mapping_with_token_id(
-                        &format!("T3_{j}"), // placeholder original; SLM doesn't return originals
+                        original_text,
                         display_val,
                         &token_id,
                         &pii_type,
@@ -322,7 +328,7 @@ impl PiiPipeline {
                     );
                     all_detections.push(PiiDetection {
                         entity_type: pii_type_str.clone(),
-                        original: format!("T3_{j}"),
+                        original: original_text.clone(),
                         synthetic: display_val.clone(),
                         tier: 3,
                         confidence: 1.0,
@@ -337,7 +343,7 @@ impl PiiPipeline {
                     &result.stage2_spans,
                     locale,
                     &mut vault,
-                    conv_id,
+                    &conv_id,
                     stage2_base,
                 );
                 all_detections.extend(stage2_detections);
