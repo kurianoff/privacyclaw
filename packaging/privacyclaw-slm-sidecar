@@ -1,0 +1,639 @@
+#!/usr/bin/env python3
+"""
+privacyclaw-slm-sidecar — PII detection and LLM proxy sidecar.
+
+Exposes:
+  GET  /health                  — readiness probe
+  POST /replace                 — PII detection + synthetic replacement
+  POST /v1/chat/completions     — streaming-aware proxy to llama-server
+
+Environment variables:
+  LLAMA_ENDPOINT     default http://127.0.0.1:8080
+  LLAMA_TIMEOUT_S    default 10
+  SIDECAR_PORT       default 16442
+  SIDECAR_HOST       default 127.0.0.1
+  LLAMA_SERVER_PATH  default "" (empty = pass-through mode, no subprocess)
+  MODEL_PATH         default "" (path to GGUF model file)
+  LOG_LEVEL          default INFO
+"""
+
+# ── Dependency guard ──────────────────────────────────────────────────────────
+# Must run before any other import so the error message is shown immediately.
+import sys
+
+_MISSING = []
+for _pkg in ("fastapi", "uvicorn", "httpx", "pydantic"):
+    try:
+        __import__(_pkg)
+    except ImportError:
+        _MISSING.append(_pkg)
+
+if _MISSING:
+    for _m in _MISSING:
+        print(f"Missing dependency: {_m}")
+    print("Install with: pip install fastapi uvicorn httpx pydantic")
+    sys.exit(1)
+
+# ── Standard-library imports ──────────────────────────────────────────────────
+import asyncio
+import hashlib
+import json
+import logging
+import os
+import re
+import signal
+import urllib.parse
+from typing import Optional
+
+# ── Third-party imports ───────────────────────────────────────────────────────
+import httpx
+import uvicorn
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+# ── Logging setup ─────────────────────────────────────────────────────────────
+# Format emits key=value fields compatible with the tracing convention.
+_LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO").upper()
+logging.basicConfig(
+    level=getattr(logging, _LOG_LEVEL, logging.INFO),
+    format="%(asctime)s [%(levelname)s] %(name)s %(message)s",
+    stream=sys.stdout,
+)
+log = logging.getLogger("privacyclaw.slm-sidecar")
+
+# ── Configuration ─────────────────────────────────────────────────────────────
+LLAMA_ENDPOINT: str = os.environ.get("LLAMA_ENDPOINT", "http://127.0.0.1:8080")
+LLAMA_TIMEOUT_S: float = float(os.environ.get("LLAMA_TIMEOUT_S", "10"))
+SIDECAR_PORT: int = int(os.environ.get("SIDECAR_PORT", "16442"))
+SIDECAR_HOST: str = os.environ.get("SIDECAR_HOST", "127.0.0.1")
+LLAMA_SERVER_PATH: str = os.environ.get("LLAMA_SERVER_PATH", "")
+MODEL_PATH: str = os.environ.get("MODEL_PATH", "")
+
+# Internal llama-server port (parsed from LLAMA_ENDPOINT).
+_parsed = urllib.parse.urlparse(LLAMA_ENDPOINT)
+_LLAMA_INTERNAL_PORT: int = _parsed.port or 8080
+
+# ── Name pool (50 ethnically diverse, clearly non-real names) ─────────────────
+NAMES: list[str] = [
+    "Maria Jensen",
+    "Omar Hassan",
+    "Yuki Tanaka",
+    "Sofia Rossi",
+    "James Okafor",
+    "Priya Nair",
+    "Lena Müller",
+    "Carlos Reyes",
+    "Amara Diallo",
+    "Ethan Kowalski",
+    "Fatima Rashida",
+    "Noah Bergström",
+    "Aisha Mensah",
+    "Lucas Ferreira",
+    "Meiling Chen",
+    "David Adeyemi",
+    "Sara Lindqvist",
+    "Ahmed Khalil",
+    "Elena Petrov",
+    "Marcus Williams",
+    "Nadia Bouchard",
+    "Ravi Sharma",
+    "Ingrid Halvorsen",
+    "Kofi Asante",
+    "Valentina Cruz",
+    "Hiroshi Nakamura",
+    "Amelia Tremblay",
+    "Yusuf Ibrahim",
+    "Clara Bergmann",
+    "Samuel Okonkwo",
+    "Layla Aziz",
+    "Andrei Volkov",
+    "Chioma Eze",
+    "Emil Johansson",
+    "Hana Suzuki",
+    "Roberto Morales",
+    "Zara Ahmed",
+    "Mikael Saarinen",
+    "Blessing Adaora",
+    "Tomas Novak",
+    "Sana Malik",
+    "Patrick Dubois",
+    "Nia Owusu",
+    "Aleksei Morozov",
+    "Isabel Gutierrez",
+    "Kwame Boateng",
+    "Astrid Eriksson",
+    "Jabari Washington",
+    "Leila Nazari",
+    "Bruno Carvalho",
+]
+
+assert len(NAMES) == 50, f"NAMES pool must have exactly 50 entries, got {len(NAMES)}"
+
+# ── Subprocess state ──────────────────────────────────────────────────────────
+_llama_ready: bool = False
+_llama_process: Optional[asyncio.subprocess.Process] = None
+_watcher_task: Optional[asyncio.Task] = None
+
+# ── Pydantic models ───────────────────────────────────────────────────────────
+
+
+class ReplaceRequest(BaseModel):
+    text: str
+    conversation_id: str = ""
+    entity_start_index: int = 0
+
+
+class Replacement(BaseModel):
+    original: str = ""
+    display_value: str = ""
+    pii_type: str = ""
+    token_id: str = ""
+    start: int
+    end: int
+
+
+class ReplaceResponse(BaseModel):
+    modified_text: str = ""
+    replacements: list[Replacement] = []
+
+
+# ── PII type classifier ───────────────────────────────────────────────────────
+
+_RE_EMAIL = re.compile(r"\b[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}\b")
+_RE_SSN = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
+_RE_CREDIT_CARD = re.compile(r"\b\d{4}[\s\-]\d{4}[\s\-]\d{4}[\s\-]\d{4}\b")
+_RE_PHONE = re.compile(r"\b[\d\s\-\(\)\.]{7,}\b")
+_RE_API_KEY = re.compile(r"\b[A-Za-z0-9_\-]{20,}\b")
+_RE_TITLE_CASE_WORD = re.compile(r"\b[A-Z][a-zÀ-ÖØ-öø-ÿ]+\b")
+
+
+def classify_pii_type(pii_str: str) -> str:
+    """Classify a PII string into a type using regex heuristics (first match wins)."""
+    if _RE_EMAIL.search(pii_str):
+        return "email"
+    if _RE_SSN.search(pii_str):
+        return "ssn"
+    if _RE_CREDIT_CARD.search(pii_str):
+        return "credit_card"
+    m = _RE_PHONE.search(pii_str)
+    if m:
+        digit_count = sum(c.isdigit() for c in m.group())
+        if digit_count >= 7:
+            return "phone"
+    m = _RE_API_KEY.search(pii_str)
+    if m:
+        s = m.group()
+        has_upper = any(c.isupper() for c in s)
+        has_lower = any(c.islower() for c in s)
+        has_digit = any(c.isdigit() for c in s)
+        if has_upper and has_lower and has_digit:
+            return "api_key"
+    words = _RE_TITLE_CASE_WORD.findall(pii_str)
+    if len(words) >= 2 and not any(c.isdigit() for c in pii_str):
+        return "person_name"
+    return "other_pii"
+
+
+# ── Synthetic display value generator ────────────────────────────────────────
+
+
+def generate_synthetic(pii_str: str, pii_type: str) -> str:
+    """Generate a deterministic hash-seeded synthetic display value."""
+    h = hashlib.sha256(pii_str.encode()).hexdigest()
+    if pii_type == "person_name":
+        idx = int(h, 16) % 50
+        return NAMES[idx]
+    if pii_type == "email":
+        return f"redacted{h[:4]}@example.com"
+    if pii_type == "phone":
+        return f"555-000-{int(h[:4], 16) % 10000:04d}"
+    if pii_type == "address":
+        return f"{int(h[:2], 16) % 90 + 10} Redacted St, Anytown"
+    if pii_type == "ssn":
+        return f"000-00-{int(h[:4], 16) % 10000:04d}"
+    if pii_type == "credit_card":
+        return f"4000-0000-0000-{int(h[:4], 16) % 10000:04d}"
+    if pii_type == "api_key":
+        return f"[REDACTED-KEY-{h[:6]}]"
+    if pii_type == "password":
+        return "[REDACTED-PASSWORD]"
+    return "[REDACTED]"
+
+
+# ── Overlap-aware offset resolver ─────────────────────────────────────────────
+
+
+def resolve_replacements(text: str, pii_strings: list[str]) -> list[Replacement]:
+    """
+    Find all occurrences of each PII string in text with overlap-aware deduplication.
+    Sorts by length descending (longest first) so longer matches take priority.
+    Returns replacements sorted by start position ascending.
+    """
+    # Deduplicate and sort longest first to give priority to longer matches.
+    unique_pii = sorted(set(pii_strings), key=len, reverse=True)
+    covered: list[tuple[int, int]] = []
+    results: list[Replacement] = []
+
+    for pii_str in unique_pii:
+        if not pii_str:
+            continue
+        pii_type = classify_pii_type(pii_str)
+        display_value = generate_synthetic(pii_str, pii_type)
+        for match in re.finditer(re.escape(pii_str), text):
+            s, e = match.start(), match.end()
+            # Skip if overlapping with an already-covered range.
+            overlapping = any(
+                cs <= s < ce or cs < e <= ce
+                for cs, ce in covered
+            )
+            if overlapping:
+                continue
+            covered.append((s, e))
+            results.append(
+                Replacement(
+                    original=pii_str,
+                    display_value=display_value,
+                    pii_type=pii_type,
+                    token_id="",
+                    start=s,
+                    end=e,
+                )
+            )
+
+    results.sort(key=lambda r: r.start)
+    return results
+
+
+# ── LLM call helper ───────────────────────────────────────────────────────────
+
+_SYSTEM_PROMPT = (
+    "You are a PII detection assistant. "
+    "Given a text, identify all personally identifiable information (PII) strings "
+    "such as names, email addresses, phone numbers, SSNs, credit card numbers, "
+    "API keys, and other sensitive identifiers. "
+    "Return ONLY a JSON array of the exact PII strings found in the text, "
+    "with no explanation. Example: [\"John Smith\", \"john@example.com\", \"555-123-4567\"]. "
+    "If no PII is found, return an empty array: []."
+)
+
+
+def _strip_markdown_fences(s: str) -> str:
+    """Strip optional ```json ... ``` or ``` ... ``` markdown code fences."""
+    s = s.strip()
+    # Remove opening fence (```json or ```)
+    s = re.sub(r"^```(?:json)?\s*", "", s)
+    # Remove closing fence
+    s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+async def call_llm_for_pii(text: str) -> list[str]:
+    """
+    Call llama-server to detect PII strings in text.
+    Returns a list of PII strings; returns [] on any error (fail-open).
+    """
+    payload = {
+        "model": "local",
+        "messages": [
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": f"Text: {text}"},
+        ],
+        "max_tokens": 512,
+        "temperature": 0.0,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=LLAMA_TIMEOUT_S) as client:
+            resp = await client.post(
+                f"{LLAMA_ENDPOINT}/v1/chat/completions",
+                json=payload,
+                headers={"Content-Type": "application/json"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            content = data["choices"][0]["message"]["content"].strip()
+            log.debug("llm response content=%s", content[:256])
+            cleaned = _strip_markdown_fences(content)
+            parsed = json.loads(cleaned)
+            if not isinstance(parsed, list):
+                raise ValueError(f"LLM returned non-list: {type(parsed)}")
+            return [item for item in parsed if isinstance(item, str)]
+    except httpx.TimeoutException as exc:
+        log.warning("LLM call timed out: %s", exc)
+        return []
+    except httpx.ConnectError as exc:
+        log.warning("LLM connect error: %s", exc)
+        return []
+    except json.JSONDecodeError as exc:
+        log.warning("LLM response JSON parse error: %s", exc)
+        return []
+    except ValueError as exc:
+        log.warning("LLM response validation error: %s", exc)
+        return []
+    except Exception as exc:
+        log.warning("LLM call failed: %s", exc)
+        return []
+
+
+# ── Lifespan (startup + shutdown) ────────────────────────────────────────────
+
+
+@asynccontextmanager
+async def _lifespan(app: FastAPI):
+    """FastAPI lifespan: handle startup and shutdown in a single context manager."""
+    global _llama_ready, _watcher_task
+
+    log.warning(
+        "sidecar starting host=%s port=%d endpoint=%s",
+        SIDECAR_HOST,
+        SIDECAR_PORT,
+        LLAMA_ENDPOINT,
+    )
+
+    if not LLAMA_SERVER_PATH:
+        # Pass-through mode: assume llama-server is managed externally.
+        log.warning("LLAMA_SERVER_PATH not set — starting in pass-through mode")
+        _llama_ready = True
+    else:
+        # Validate paths before spawning anything.
+        if not os.path.isfile(LLAMA_SERVER_PATH):
+            log.warning(
+                "LLAMA_SERVER_PATH does not exist path=%s — exiting",
+                LLAMA_SERVER_PATH,
+            )
+            print(
+                f"ERROR: LLAMA_SERVER_PATH={LLAMA_SERVER_PATH!r} does not exist. "
+                "Ensure the binary is present or unset LLAMA_SERVER_PATH for pass-through mode.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        if not os.path.isfile(MODEL_PATH):
+            log.warning("MODEL_PATH does not exist — exiting")
+            print(
+                f"ERROR: MODEL_PATH={MODEL_PATH!r} does not exist. "
+                "Provide a valid GGUF model file path.",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
+        await _start_llama_process()
+        _watcher_task = asyncio.create_task(_watcher_loop())
+        log.warning("llama-server watcher task started")
+
+    yield  # Application runs here.
+
+    # ── Shutdown ──────────────────────────────────────────────────────────────
+    log.warning("sidecar shutting down")
+
+    if _watcher_task is not None and not _watcher_task.done():
+        _watcher_task.cancel()
+        try:
+            await _watcher_task
+        except asyncio.CancelledError:
+            pass
+
+    if _llama_process is not None and _llama_process.returncode is None:
+        log.warning("llama-server stopping pid=%d", _llama_process.pid)
+        _llama_process.terminate()
+        try:
+            await asyncio.wait_for(_llama_process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            log.warning(
+                "llama-server did not stop — killing pid=%d", _llama_process.pid
+            )
+            _llama_process.kill()
+
+    log.warning("sidecar stopped")
+
+
+# ── FastAPI app ───────────────────────────────────────────────────────────────
+
+app = FastAPI(title="privacyclaw-slm-sidecar", lifespan=_lifespan)
+
+
+@app.get("/health")
+async def health() -> Response:
+    """Readiness probe. Returns 200 only after llama-server is ready."""
+    if _llama_ready:
+        return Response(
+            content='{"status":"ok"}',
+            media_type="application/json",
+            status_code=200,
+        )
+    return Response(
+        content='{"status":"starting"}',
+        media_type="application/json",
+        status_code=503,
+    )
+
+
+@app.post("/replace")
+async def replace(req: ReplaceRequest) -> ReplaceResponse:
+    """
+    PII detection endpoint. Fail-open: any internal error returns HTTP 200
+    with empty replacements so the Rust pipeline degrades gracefully to T1/T2.
+    """
+    if len(req.text) > 32_768:
+        raise HTTPException(status_code=400, detail="text too large")
+    log.debug(
+        "replace request conversation_id=%s text_len=%d",
+        req.conversation_id,
+        len(req.text),
+    )
+    try:
+        pii_strings = await call_llm_for_pii(req.text)
+        replacements = resolve_replacements(req.text, pii_strings)
+        log.debug(
+            "replace found count=%d conversation_id=%s",
+            len(replacements),
+            req.conversation_id,
+        )
+        return ReplaceResponse(replacements=replacements)
+    except Exception as exc:
+        log.warning("SLM /replace failed: %s", exc)
+        return ReplaceResponse(replacements=[])
+
+
+@app.post("/v1/chat/completions")
+async def chat_completions(request: Request) -> Response:
+    """
+    Streaming-aware proxy pass-through to llama-server.
+    Supports both streaming (text/event-stream) and non-streaming responses.
+    Returns HTTP 503 if llama-server is unreachable.
+    """
+    body_bytes = await request.body()
+    is_streaming = False
+    try:
+        body_json = json.loads(body_bytes)
+        is_streaming = bool(body_json.get("stream", False))
+    except (json.JSONDecodeError, AttributeError):
+        pass
+
+    target_url = f"{LLAMA_ENDPOINT}/v1/chat/completions"
+    forward_headers = {"Content-Type": "application/json"}
+
+    if is_streaming:
+        async def _stream_generator():
+            async with httpx.AsyncClient(timeout=LLAMA_TIMEOUT_S) as client:
+                async with client.stream(
+                    "POST",
+                    target_url,
+                    content=body_bytes,
+                    headers=forward_headers,
+                ) as upstream:
+                    async for chunk in upstream.aiter_bytes():
+                        yield chunk
+
+        return StreamingResponse(
+            _stream_generator(),
+            media_type="text/event-stream",
+        )
+
+    # Non-streaming path.
+    try:
+        async with httpx.AsyncClient(timeout=LLAMA_TIMEOUT_S) as client:
+            upstream = await client.post(
+                target_url,
+                content=body_bytes,
+                headers=forward_headers,
+            )
+        return Response(
+            content=upstream.content,
+            status_code=upstream.status_code,
+            media_type=upstream.headers.get("content-type", "application/json"),
+        )
+    except (httpx.TimeoutException, httpx.ConnectError) as exc:
+        log.warning("chat_completions proxy error: %s", exc)
+        return Response(
+            content='{"error":"llama-server unavailable"}',
+            status_code=503,
+            media_type="application/json",
+        )
+
+
+# ── llama-server subprocess manager ──────────────────────────────────────────
+
+
+async def _health_poll_llama() -> bool:
+    """Single health poll attempt. Returns True if llama-server is healthy."""
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await client.get(f"{LLAMA_ENDPOINT}/health")
+            return resp.status_code == 200
+    except Exception:
+        return False
+
+
+async def _start_llama_process() -> Optional[asyncio.subprocess.Process]:
+    """Spawn llama-server subprocess. Returns the process or None on failure."""
+    global _llama_process
+    port_str = str(_LLAMA_INTERNAL_PORT)
+    # Never log MODEL_PATH at INFO or above (may contain user home directory).
+    log.warning(
+        "llama-server starting port=%s binary=%s",
+        port_str,
+        LLAMA_SERVER_PATH,
+    )
+    try:
+        proc = await asyncio.create_subprocess_exec(
+            LLAMA_SERVER_PATH,
+            "--model", MODEL_PATH,
+            "--port", port_str,
+            "--ctx-size", "2048",
+            "--log-disable",
+            stdout=asyncio.subprocess.DEVNULL,
+            stderr=asyncio.subprocess.DEVNULL,
+        )
+        _llama_process = proc
+        log.warning("llama-server started pid=%d port=%s", proc.pid, port_str)
+        return proc
+    except Exception as exc:
+        log.warning("llama-server spawn failed: %s", exc)
+        return None
+
+
+async def _watcher_loop() -> None:
+    """
+    Background task: health-poll llama-server every 5 seconds.
+    Detects crashes via process.returncode and health failures.
+    Restarts with exponential backoff on failure.
+    """
+    global _llama_ready, _llama_process
+
+    consecutive_failures = 0
+    backoff_s = 5
+    _max_backoff_s = 40
+    import time as _time
+
+    startup_time = _time.monotonic()
+
+    while True:
+        await asyncio.sleep(5)
+
+        # Check if process has exited (crash detection).
+        if _llama_process is not None and _llama_process.returncode is not None:
+            exit_code = _llama_process.returncode
+            log.warning(
+                "llama-server crashed exit_code=%d restart_in=%ds",
+                exit_code,
+                backoff_s,
+            )
+            _llama_ready = False
+            await asyncio.sleep(backoff_s)
+            backoff_s = min(backoff_s * 2, _max_backoff_s)
+            _llama_process = await _start_llama_process()
+            consecutive_failures = 0
+            continue
+
+        # Health poll.
+        log.debug("llama health poll endpoint=%s", LLAMA_ENDPOINT)
+        healthy = await _health_poll_llama()
+        log.debug("llama health poll result=%s", healthy)
+
+        if healthy:
+            if not _llama_ready:
+                elapsed_ms = int((_time.monotonic() - startup_time) * 1000)
+                log.warning(
+                    "llama-server ready elapsed_ms=%d", elapsed_ms
+                )
+                _llama_ready = True
+            consecutive_failures = 0
+            backoff_s = 5  # Reset backoff on recovery.
+        else:
+            consecutive_failures += 1
+            log.debug(
+                "llama health poll failed consecutive=%d", consecutive_failures
+            )
+            if consecutive_failures >= 3 and _llama_ready:
+                # Lost readiness — restart.
+                log.warning(
+                    "llama-server unhealthy consecutive=%d restarting",
+                    consecutive_failures,
+                )
+                _llama_ready = False
+                if _llama_process is not None:
+                    try:
+                        _llama_process.terminate()
+                        await asyncio.wait_for(_llama_process.wait(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        _llama_process.kill()
+                    except Exception:
+                        pass
+                await asyncio.sleep(backoff_s)
+                backoff_s = min(backoff_s * 2, _max_backoff_s)
+                _llama_process = await _start_llama_process()
+                consecutive_failures = 0
+
+
+
+# ── Entry point ───────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    uvicorn.run(
+        app,
+        host=SIDECAR_HOST,
+        port=SIDECAR_PORT,
+        log_level=_LOG_LEVEL.lower(),
+    )
