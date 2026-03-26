@@ -2,7 +2,7 @@
 
 ## 1. Scaffold and configuration
 
-- [ ] 1.1 Create `packaging/privacyclaw-slm-sidecar` as an executable Python 3
+- [x] 1.1 Create `packaging/privacyclaw-slm-sidecar` as an executable Python 3
   script (shebang: `#!/usr/bin/env python3`, `chmod 755`). Add the four
   configuration constants parsed from environment variables at module top-level:
   `LLAMA_ENDPOINT` (default `http://127.0.0.1:8080`), `LLAMA_TIMEOUT_S`
@@ -12,14 +12,14 @@
   and `MODEL_PATH` (default empty string — path to GGUF model file).
   Verify: script is importable; constants parse their defaults without error.
 
-- [ ] 1.2 Add the dependency guard `__main__` block that imports `fastapi`,
+- [x] 1.2 Add the dependency guard `__main__` block that imports `fastapi`,
   `uvicorn`, `httpx`, `pydantic` and prints a `pip install` message then exits 1
   if any import fails. Verify: running the script without the deps installed
   exits with code 1 and prints the install command.
 
 ## 2. Pydantic models
 
-- [ ] 2.1 Define Pydantic v2 models:
+- [x] 2.1 Define Pydantic v2 models:
   - `ReplaceRequest(BaseModel)`: `text: str`, `conversation_id: str = ""`,
     `entity_start_index: int = 0`.
   - `Replacement(BaseModel)`: `original: str = ""`, `display_value: str = ""`,
@@ -31,7 +31,7 @@
 
 ## 3. PII type classifier
 
-- [ ] 3.1 Implement `classify_pii_type(pii_str: str) -> str` using regex heuristics
+- [x] 3.1 Implement `classify_pii_type(pii_str: str) -> str` using regex heuristics
   applied in priority order (first match wins):
   1. Email: `\b[\w.+-]+@[\w-]+\.[a-zA-Z]{2,}\b` → `"email"`
   2. SSN: `\b\d{3}-\d{2}-\d{4}\b` → `"ssn"`
@@ -46,7 +46,7 @@
 
 ## 4. Synthetic display value generator
 
-- [ ] 4.1 Implement `generate_synthetic(pii_str: str, pii_type: str) -> str`.
+- [x] 4.1 Implement `generate_synthetic(pii_str: str, pii_type: str) -> str`.
   Hash: `h = hashlib.sha256(pii_str.encode()).hexdigest()`. Strategy per type:
   - `person_name`: `h4 = int(h, 16) % 50`; return `NAMES[h4]` from the name pool.
   - `email`: return `f"redacted{h[:4]}@example.com"`.
@@ -60,7 +60,7 @@
   Verify: `generate_synthetic("Anne Nicole", "person_name")` returns one of the
   50 NAMES entries and is deterministic (same input → same output every time).
 
-- [ ] 4.2 Define the `NAMES` pool as a module-level list of exactly 50 strings, each
+- [x] 4.2 Define the `NAMES` pool as a module-level list of exactly 50 strings, each
   `"FirstName LastName"`. Names must be ethnically diverse and clearly non-real
   people (avoid any name that is an exact real public figure). Representative
   sample required in the list:
@@ -71,7 +71,7 @@
 
 ## 5. Overlap-aware offset resolver
 
-- [ ] 5.1 Implement `resolve_replacements(text: str, pii_strings: list[str]) -> list[Replacement]`:
+- [x] 5.1 Implement `resolve_replacements(text: str, pii_strings: list[str]) -> list[Replacement]`:
   1. Sort `set(pii_strings)` by length descending (longest first).
   2. Maintain `covered: list[tuple[int, int]] = []`.
   3. For each `pii_str`: call `classify_pii_type` and `generate_synthetic`.
@@ -89,7 +89,7 @@
 
 ## 6. LLM call helper and response parser
 
-- [ ] 6.1 Implement `async def call_llm_for_pii(text: str) -> list[str]` using
+- [x] 6.1 Implement `async def call_llm_for_pii(text: str) -> list[str]` using
   `httpx.AsyncClient`. POST to `f"{LLAMA_ENDPOINT}/v1/chat/completions"` with:
 
   ```json
@@ -114,19 +114,19 @@
   `{"choices":[{"message":{"content":"[\"Anne\",\"333-444-5555\"]"}}]}` returns
   `["Anne", "333-444-5555"]`.
 
-- [ ] 6.2 Verify markdown fence stripping: if LLM returns
+- [x] 6.2 Verify markdown fence stripping: if LLM returns
   ` ```json\n["Alice"]\n``` ` the parser returns `["Alice"]`. If LLM returns
   prose with no JSON array, parser returns `[]`.
 
 ## 7. FastAPI endpoints
 
-- [ ] 7.1 Implement `GET /health` endpoint:
+- [x] 7.1 Implement `GET /health` endpoint:
   - Returns `{"status": "ok"}` (HTTP 200) only after llama-server has passed its
     own health check at least once since sidecar startup.
   - Returns `{"status": "starting"}` (HTTP 503) if llama-server is not yet ready.
   Verify: before llama-server is ready, `/health` returns 503; after, returns 200.
 
-- [ ] 7.2 Implement `POST /replace` endpoint with fail-open guarantee:
+- [x] 7.2 Implement `POST /replace` endpoint with fail-open guarantee:
 
   ```python
   @app.post("/replace")
@@ -146,7 +146,7 @@
   returning `["Alice"]` returns `ReplaceResponse` with one entry. LLM failure
   returns HTTP 200 with empty `replacements`.
 
-- [ ] 7.3 Implement `POST /v1/chat/completions` streaming-aware proxy pass-through:
+- [x] 7.3 Implement `POST /v1/chat/completions` streaming-aware proxy pass-through:
   - Read raw request body with `await request.body()`.
   - Check if the request body contains `"stream": true` (after JSON parse).
   - If streaming: use `httpx.AsyncClient.stream("POST", ...)` and return a
@@ -163,7 +163,7 @@
 
 ## 8. llama-server subprocess manager
 
-- [ ] 8.1 Implement `LlamaServerManager` class (or module-level functions) that:
+- [x] 8.1 Implement `LlamaServerManager` class (or module-level functions) that:
   - On FastAPI startup (`@app.on_event("startup")`): if `LLAMA_SERVER_PATH` and
     `MODEL_PATH` are non-empty, validate both paths exist and fail-loud with a
     clear error message + `sys.exit(1)` if either is missing.
@@ -195,7 +195,7 @@
   Verify: if `LLAMA_SERVER_PATH` points to a non-existent file, sidecar exits 1
   with a clear error before binding any port.
 
-- [ ] 8.2 Log subprocess lifecycle events at appropriate levels per CLAUDE.md
+- [x] 8.2 Log subprocess lifecycle events at appropriate levels per CLAUDE.md
   logging rules:
   - `WARN`: llama-server started (with PID and port), stopped, restarted.
   - `WARN`: llama-server became ready (elapsed ms).
@@ -205,13 +205,13 @@
 
 ## 9. Logging and privacy
 
-- [ ] 9.1 Set up structured logging using Python's `logging` module with a format
+- [x] 9.1 Set up structured logging using Python's `logging` module with a format
   that emits key=value fields compatible with the tracing convention in the rest
   of the project:
   `"%(asctime)s [%(levelname)s] %(name)s %(message)s"`.
   Log level controlled by `LOG_LEVEL` env var (default `INFO`).
 
-- [ ] 9.2 Enforce privacy in all log calls:
+- [x] 9.2 Enforce privacy in all log calls:
   - Raw `text` content from `ReplaceRequest`: NEVER logged at INFO or above.
   - `conversation_id`: logged at DEBUG only.
   - LLM response content: logged at DEBUG only, truncated to 256 chars.
@@ -221,7 +221,7 @@
 
 ## 10. End-to-end integration test
 
-- [ ] 10.1 Add `tests/test_slm_sidecar.py` (pytest). Use `httpx.AsyncClient` with
+- [x] 10.1 Add `tests/test_slm_sidecar.py` (pytest). Use `httpx.AsyncClient` with
   the sidecar started in-process (import the module and use FastAPI `TestClient`
   or `AsyncClient` with `ASGITransport`). Mock llama-server with a minimal
   `httpx.MockTransport` or `respx` fixture. Test cases:
@@ -239,26 +239,26 @@
 
 ## 11. Packaging validation
 
-- [ ] 11.1 Verify `packaging/postinstall` already installs the sidecar script (task 8.1
+- [x] 11.1 Verify `packaging/postinstall` already installs the sidecar script (task 8.1
   of `update-pii-t3-first-pipeline`). If that task is not yet complete, note the
   dependency but do not duplicate the postinstall change in this task list.
   The sidecar script file must be present at the path the postinstall script
   expects: `$SHARE_DIR/privacyclaw-slm-sidecar`.
 
-- [ ] 11.2 Verify the script is executable (`chmod 755`) and has the correct shebang
+- [x] 11.2 Verify the script is executable (`chmod 755`) and has the correct shebang
   (`#!/usr/bin/env python3`). Run `python3 -c "import ast; ast.parse(open('packaging/privacyclaw-slm-sidecar').read())"` to confirm it is valid Python syntax.
 
 ## 12. Final validation
 
-- [ ] 12.1 Run `python3 -m py_compile packaging/privacyclaw-slm-sidecar` — must
+- [x] 12.1 Run `python3 -m py_compile packaging/privacyclaw-slm-sidecar` — must
   complete with no errors.
 
-- [ ] 12.2 Run `pytest tests/test_slm_sidecar.py -v` — all tests in task 10.1 must pass.
+- [x] 12.2 Run `pytest tests/test_slm_sidecar.py -v` — all tests in task 10.1 must pass.
 
-- [ ] 12.3 Run `openspec validate add-slm-sidecar-script --strict` — must pass with
+- [x] 12.3 Run `openspec validate add-slm-sidecar-script --strict` — must pass with
   no issues.
 
-- [ ] 12.4 Manual smoke test (optional, if llama.cpp is available locally):
+- [x] 12.4 Manual smoke test (optional, if llama.cpp is available locally):
   Start the sidecar with `LLAMA_SERVER_PATH=<path> MODEL_PATH=<model.gguf>
   python3 packaging/privacyclaw-slm-sidecar`. Confirm `/health` returns 200 and
   `POST /replace` with a test text returns non-empty replacements.
