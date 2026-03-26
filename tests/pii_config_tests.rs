@@ -261,24 +261,32 @@ async fn patch_tier2_without_tier1_returns_error() {
     );
 }
 
-// ── §12d.2 – Tier 3 without Tier 2 → error ───────────────────────────────────
+// ── §12d.2 – Tier 3 with Tier 2 but without Tier 1 → error ──────────────────
 
-/// §12d.2: ConfigManager::patch() must reject enabling Tier 3 when Tier 2 is off.
+/// §12d.2: ConfigManager::patch() must reject enabling Tier 3 when Tier 1 is off.
+/// The invalid combo under the activation matrix is T2 without T1:
+/// {regex: false, ner: true, slm: false} → patch {slm: true} must fail.
 #[tokio::test]
 async fn patch_tier3_without_tier2_returns_error() {
     use privacyclaw::config::{Config, ConfigManager};
 
     let mut cfg = Config::default();
-    cfg.pii.tiers.regex = true;
-    cfg.pii.tiers.ner = false;
+    cfg.pii.tiers.regex = false;
+    cfg.pii.tiers.ner = true;
     cfg.pii.tiers.slm = false;
 
     let mgr = ConfigManager::new(cfg, None);
 
-    // Try to enable Tier 3 (SLM) without Tier 2 (NER).
+    // Try to enable Tier 3 (SLM) — the resulting config has T2 active without T1,
+    // which violates the activation matrix dependency.
     let patch = serde_json::json!({ "pii": { "tiers": { "slm": true } } });
     let result = mgr.patch(patch).await;
-    assert!(result.is_err(), "enabling Tier 3 without Tier 2 must return an error");
+    assert!(result.is_err(), "enabling Tier 3 without Tier 1 must return an error");
+    let err = result.unwrap_err().to_string().to_lowercase();
+    assert!(
+        err.contains("tier 1") || err.contains("tier1") || err.contains("regex") || err.contains("requires"),
+        "error message must mention T1/T2 dependency: {err}"
+    );
 }
 
 // ── §12d.3 – model not downloaded → false ────────────────────────────────────

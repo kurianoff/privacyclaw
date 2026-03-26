@@ -261,7 +261,9 @@ impl PiiVault {
     /// Add a mapping with an externally-computed token_id and display_value.
     ///
     /// Populates all three index HashMaps in addition to the core mapping.
-    /// Idempotent: if `original` already exists, this is a no-op.
+    /// The core `original_to_synthetic` insert is idempotent (skipped on duplicate original),
+    /// but the index HashMaps are always populated so cascade lookups work even when
+    /// `get_or_create` was called before this method for the same original.
     pub fn add_mapping_with_token_id(
         &mut self,
         original: &str,
@@ -271,21 +273,41 @@ impl PiiVault {
         tier: u8,
         confidence: f32,
     ) {
-        if self.original_to_synthetic.contains_key(original) {
-            return; // idempotent
-        }
+        // Compute full_token unconditionally — it is needed in both branches below.
         let full_token = xml_token(token_id, display_value);
-        self.insert_mapping_raw_with_token_id(original.to_string(), display_value.to_string(), pii_type.label().to_string(), tier, confidence, token_id.to_string());
+        if !self.original_to_synthetic.contains_key(original) {
+            self.insert_mapping_raw_with_token_id(
+                original.to_string(),
+                display_value.to_string(),
+                pii_type.label().to_string(),
+                tier,
+                confidence,
+                token_id.to_string(),
+            );
+            self.rebuild_automaton();
+            tracing::debug!(
+                mapping_count = self.mapping_count(),
+                token_id,
+                pii_type = pii_type.label(),
+                "vault: add_mapping_with_token_id: new mapping inserted"
+            );
+        } else {
+            tracing::debug!(
+                token_id,
+                "vault: add_mapping_with_token_id: original already mapped, skipping core insert"
+            );
+        }
+        // Always populate index maps — inserts are idempotent by key so re-insertion on
+        // true duplicates is safe. This ensures cascade lookups work even when the
+        // original was first seen via get_or_create (which does not populate index maps).
         self.full_token_to_original.insert(full_token, original.to_string());
         self.token_id_to_original.insert(token_id.to_string(), original.to_string());
         self.display_value_to_original.insert(display_value.to_string(), original.to_string());
-        self.rebuild_automaton();
-        tracing::debug!(
-            mapping_count = self.mapping_count(),
-            token_id,
-            pii_type = pii_type.label(),
-            "vault: add_mapping_with_token_id complete"
-        );
+    }
+
+    /// Return the conversation ID this vault was created for.
+    pub fn conversation_id(&self) -> &str {
+        &self.conversation_id
     }
 
     /// Cascade Level 2 lookup: find original PII by TOKEN_ID.
@@ -563,8 +585,8 @@ impl VaultRegistry {
                         pii_type: PiiType::Custom(r.pii_type),
                         tier: r.tier.unwrap_or(0),
                         confidence: r.confidence.unwrap_or(0.0),
-                        token_id: String::new(),
-                        display_value: String::new(),
+                        token_id: r.token_id.unwrap_or_default(),
+                        display_value: r.display_value.unwrap_or_default(),
                     })
                     .collect();
                 PiiVault::from_records(conv_id, seed, vault_records)

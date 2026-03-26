@@ -46,6 +46,12 @@ pub struct StoredVaultRecord {
     /// Detection confidence (0.0–1.0). 0.0 means legacy record where confidence was not stored.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub confidence: Option<f32>,
+    /// XML token ID (8-char base62). Absent in legacy records; `#[serde(default)]` yields `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_id: Option<String>,
+    /// Bare display value (synthetic without XML wrapper). Absent in legacy records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display_value: Option<String>,
 }
 
 /// A single per-message PII detection record.
@@ -384,7 +390,7 @@ impl Store {
         &self,
         conv_id: &str,
         rng_seed: u64,
-        records: &[(String, String, String, u8, f32)],
+        records: &[(String, String, String, u8, f32, String, String)],
     ) -> Result<()> {
         let Some(path) = self.conv_file_path(conv_id) else {
             return Ok(());
@@ -395,12 +401,14 @@ impl Store {
             rng_seed,
             mappings: records
                 .iter()
-                .map(|(orig, synth, pii_type, tier, conf)| StoredVaultRecord {
+                .map(|(orig, synth, pii_type, tier, conf, token_id, display_value)| StoredVaultRecord {
                     original: orig.clone(),
                     synthetic: synth.clone(),
                     pii_type: pii_type.clone(),
                     tier: Some(*tier),
                     confidence: Some(*conf),
+                    token_id: if token_id.is_empty() { None } else { Some(token_id.clone()) },
+                    display_value: if display_value.is_empty() { None } else { Some(display_value.clone()) },
                 })
                 .collect(),
         };
@@ -869,7 +877,7 @@ mod tests {
                 "conv-vault-basic",
                 42,
                 &[
-                    ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32),
+                    ("alice@acme.com".to_string(), "bob@example.com".to_string(), "email".to_string(), 1u8, 1.0f32, String::new(), String::new()),
                 ],
             )
             .unwrap();
@@ -917,7 +925,7 @@ mod tests {
             .save_vault(
                 "conv-vault-overwrite",
                 1,
-                &[("first@orig.com".to_string(), "first@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32)],
+                &[("first@orig.com".to_string(), "first@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32, String::new(), String::new())],
             )
             .unwrap();
 
@@ -926,7 +934,7 @@ mod tests {
             .save_vault(
                 "conv-vault-overwrite",
                 2,
-                &[("second@orig.com".to_string(), "second@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32)],
+                &[("second@orig.com".to_string(), "second@synth.com".to_string(), "email".to_string(), 1u8, 1.0f32, String::new(), String::new())],
             )
             .unwrap();
 
@@ -954,7 +962,7 @@ mod tests {
         store.insert_conversation(&conv).unwrap();
 
         // Save with an empty mapping slice — must not crash.
-        store.save_vault("conv-vault-empty", 0, &[] as &[(String, String, String, u8, f32)]).unwrap();
+        store.save_vault("conv-vault-empty", 0, &[] as &[(String, String, String, u8, f32, String, String)]).unwrap();
 
         let result = store.load_vault("conv-vault-empty").unwrap();
         assert!(result.is_some(), "empty vault should still produce a vault line");
@@ -969,7 +977,7 @@ mod tests {
         let conv = make_conv("conv-vault-multi", "anthropic", "fp-vault-multi");
         store.insert_conversation(&conv).unwrap();
 
-        let mappings: Vec<(String, String, String, u8, f32)> = (0..5)
+        let mappings: Vec<(String, String, String, u8, f32, String, String)> = (0..5)
             .map(|i| {
                 (
                     format!("original-{}@acme.com", i),
@@ -977,6 +985,8 @@ mod tests {
                     "email".to_string(),
                     1u8,
                     1.0f32,
+                    String::new(),
+                    String::new(),
                 )
             })
             .collect();
@@ -1113,6 +1123,8 @@ mod tests {
             pii_type: "email".to_string(),
             tier: Some(1),
             confidence: Some(0.88),
+            token_id: None,
+            display_value: None,
         };
         let json = serde_json::to_string(&rec).unwrap();
         assert!(json.contains("\"confidence\""), "confidence missing from JSON: {json}");
@@ -1130,6 +1142,8 @@ mod tests {
             pii_type: "email".to_string(),
             tier: None,
             confidence: None,
+            token_id: None,
+            display_value: None,
         };
         let json = serde_json::to_string(&rec).unwrap();
         assert!(!json.contains("\"confidence\""), "None confidence must be absent: {json}");
