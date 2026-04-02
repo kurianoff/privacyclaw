@@ -211,5 +211,9 @@ class Privacyclaw < Formula
     ca_path = shell_output("#{bin}/privacyclaw ca-path").strip
     assert_match(/\.pem$/, ca_path)
     assert_predicate Pathname.new(ca_path), :exist?
+
+    # Verify sidecar script is installed and self-identifies.
+    assert_match "privacyclaw-slm-sidecar 0.1.0",
+                 shell_output("#{bin}/privacyclaw-slm-sidecar --version")
   end
 end
