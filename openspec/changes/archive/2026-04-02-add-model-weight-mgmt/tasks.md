@@ -1,49 +1,49 @@
 ## 1. Catalog SHA-256 Values
 
-- [ ] 1.1 Download each of the four GGUF files from HuggingFace and compute SHA-256. Run all four in parallel (separate terminal tabs or background jobs) to minimize wall-clock time (~2.3 GB largest file):
+- [x] 1.1 Download each of the four GGUF files from HuggingFace and compute SHA-256. Run all four in parallel (separate terminal tabs or background jobs) to minimize wall-clock time (~2.3 GB largest file):
   - `smollm2-135m-instruct-q4_k_m.gguf` (~90 MB) — URL in `catalog()[0].url`
   - `qwen2.5-0.5b-instruct-q4_k_m.gguf` (~400 MB) — URL in `catalog()[1].url`
   - `Llama-3.2-1B-Instruct-Q4_K_M.gguf` (~700 MB) — URL in `catalog()[2].url`
   - `Phi-3-mini-4k-instruct-q4.gguf` (~2.3 GB) — URL in `catalog()[3].url`
   - Command per file: `curl -L <url> | shasum -a 256` (macOS) or `curl -L <url> | sha256sum` (Linux)
-- [ ] 1.2 In `src/models/mod.rs`, populate the `sha256: ""` field of each `ModelInfo` entry in the static `CATALOG` slice with the computed lowercase hex string.
-- [ ] 1.3 Verify: `cargo build` succeeds. The existing `download_with_bar` code already checks `info.sha256` when non-empty (line 280 of `src/models/mod.rs`) — no new test code needed for the checksum path itself.
+- [x] 1.2 In `src/models/mod.rs`, populate the `sha256: ""` field of each `ModelInfo` entry in the static `CATALOG` slice with the computed lowercase hex string.
+- [x] 1.3 Verify: `cargo build` succeeds. The existing `download_with_bar` code already checks `info.sha256` when non-empty (line 280 of `src/models/mod.rs`) — no new test code needed for the checksum path itself.
 
 ## 2. Extract llama-server Binary Path Helper
 
-- [ ] 2.1 In `src/dashboard/mod.rs`, add a `pub(crate)` free function near the top of the file:
+- [x] 2.1 In `src/dashboard/mod.rs`, add a `pub(crate)` free function near the top of the file:
   ```rust
   pub(crate) fn llama_server_bin_path() -> std::path::PathBuf {
       crate::config::default_config_dir().join("bin/llama-server")
   }
   ```
-- [ ] 2.2 Replace the hardcoded `crate::config::default_config_dir().join("bin/llama-server")` at line 474 of `src/dashboard/mod.rs` with `llama_server_bin_path()`.
-- [ ] 2.3 Verify: `cargo build` succeeds; behavior is identical (pure refactor).
+- [x] 2.2 Replace the hardcoded `crate::config::default_config_dir().join("bin/llama-server")` at line 474 of `src/dashboard/mod.rs` with `llama_server_bin_path()`.
+- [x] 2.3 Verify: `cargo build` succeeds; behavior is identical (pure refactor).
 
 ## 3. Hoist SidecarHandle — dashboard::run() Signature Change
 
-- [ ] 3.1 In `src/dashboard/mod.rs`, make `SidecarHandle` accessible from `main.rs`:
+- [x] 3.1 In `src/dashboard/mod.rs`, make `SidecarHandle` accessible from `main.rs`:
   - Change `type SidecarHandle = ...` to `pub(crate) type SidecarHandle = ...`.
-- [ ] 3.2 In `src/dashboard/mod.rs`, change `pub async fn run(...)` to accept `sidecar: SidecarHandle` as an additional parameter (add as last parameter):
+- [x] 3.2 In `src/dashboard/mod.rs`, change `pub async fn run(...)` to accept `sidecar: SidecarHandle` as an additional parameter (add as last parameter):
   - Remove the line `let sidecar: SidecarHandle = Arc::new(Mutex::new(None));` from the function body.
   - The `sidecar` variable is then used identically in the rest of the function (cloned into each connection handler).
-- [ ] 3.3 In `src/main.rs` (`cmd_start`), add the following immediately after the function's opening variable declarations and before any other logic (so it is available for both `ensure_slm_model` in Task 4 and the dashboard spawn):
+- [x] 3.3 In `src/main.rs` (`cmd_start`), add the following immediately after the function's opening variable declarations and before any other logic (so it is available for both `ensure_slm_model` in Task 4 and the dashboard spawn):
   ```rust
   let sidecar: dashboard::SidecarHandle = Arc::new(Mutex::new(None));
   ```
   Pass `sidecar.clone()` to `dashboard::run(...)` at the dashboard spawn site (currently line 677).
-- [ ] 3.4 In `src/main.rs` (`run_tray_mode`), add a corresponding `SidecarHandle` creation and pass it to `dashboard::run(...)` at the dashboard spawn site (currently line 394). This is completed as part of Task 5 where the tray path is restructured.
-- [ ] 3.5 Verify: `cargo build` succeeds. Dashboard activate/deactivate flow is unaffected (the handle is now passed in rather than created internally, but used identically).
+- [x] 3.4 In `src/main.rs` (`run_tray_mode`), add a corresponding `SidecarHandle` creation and pass it to `dashboard::run(...)` at the dashboard spawn site (currently line 394). This is completed as part of Task 5 where the tray path is restructured.
+- [x] 3.5 Verify: `cargo build` succeeds. Dashboard activate/deactivate flow is unaffected (the handle is now passed in rather than created internally, but used identically).
 
 ## 4. ensure_slm_model Function
 
-- [ ] 4.1 In `src/main.rs`, add the following `use` if not already present:
+- [x] 4.1 In `src/main.rs`, add the following `use` if not already present:
   ```rust
   use std::sync::Mutex;
   ```
   Also ensure `serde_json` is accessible (it is already used in `main.rs` at line 807 — no new import needed).
-- [ ] 4.2 In `src/main.rs`, add `async fn ensure_slm_model(cfg: &mut Config, cfg_mgr: &Arc<ConfigManager>, sidecar: &dashboard::SidecarHandle)`.
-- [ ] 4.3 Implement the early-return guard at the top of `ensure_slm_model`:
+- [x] 4.2 In `src/main.rs`, add `async fn ensure_slm_model(cfg: &mut Config, cfg_mgr: &Arc<ConfigManager>, sidecar: &dashboard::SidecarHandle)`.
+- [x] 4.3 Implement the early-return guard at the top of `ensure_slm_model`:
   ```rust
   if !cfg.pii.tiers.slm { return; }
   let models_dir = cfg.resolved_models_dir();
@@ -55,14 +55,14 @@
   }
   ```
   Note: `resolved_models_dir()` is defined in `src/config.rs` at line 242. `is_downloaded()` is defined in `src/models/mod.rs` at line 123 — takes `(models_dir: &Path, id: &str)`.
-- [ ] 4.4 Implement the download call:
+- [x] 4.4 Implement the download call:
   ```rust
   tracing::info!(model_id = "smollm2-135m", size_mb = 90, "T3 enabled but no model active; auto-downloading");
   let smollm2_info = &crate::models::catalog()[0]; // smollm2-135m is index 0
   let result = crate::models::download_with_bar(smollm2_info, &models_dir).await;
   ```
   Note: `download_with_bar` is defined in `src/models/mod.rs` at line 210 — takes `(info: &'static ModelInfo, models_dir: &Path)`. `catalog()` returns `&'static [ModelInfo]` so `&catalog()[0]` satisfies the `'static` lifetime.
-- [ ] 4.5 Implement the failure branch (download Err):
+- [x] 4.5 Implement the failure branch (download Err):
   ```rust
   match result {
       Err(e) => {
@@ -73,7 +73,7 @@
       Ok(()) => { /* continue to success branch */ }
   }
   ```
-- [ ] 4.6 Implement the success branch after download Ok:
+- [x] 4.6 Implement the success branch after download Ok:
   - Set `cfg.pii.slm.model_id = Some("smollm2-135m".to_string())`.
   - Do NOT mutate `cfg.pii.slm.endpoint`. The config default is already `http://127.0.0.1:16442` (see `src/config.rs` line 177) — the correct sidecar port. Mutating it would override any user-configured custom endpoint.
   - Persist config:
@@ -106,27 +106,27 @@
         }
     }
     ```
-- [ ] 4.7 In `cmd_start`, make `cfg` mutable at the top of the function body:
+- [x] 4.7 In `cmd_start`, make `cfg` mutable at the top of the function body:
   ```rust
   let mut cfg = cfg; // shadow the parameter to allow mutation before Arc::new(cfg)
   ```
   Insert this immediately after the function signature's opening brace, before any other use of `cfg`.
-- [ ] 4.8 In `cmd_start`, call `ensure_slm_model` after creating `sidecar` (Task 3.3) and before `build_pii_ctx`. The call sequence must be:
+- [x] 4.8 In `cmd_start`, call `ensure_slm_model` after creating `sidecar` (Task 3.3) and before `build_pii_ctx`. The call sequence must be:
   ```rust
   let sidecar: dashboard::SidecarHandle = Arc::new(Mutex::new(None));
   ensure_slm_model(&mut cfg, &cfg_mgr, &sidecar).await;
   let pii: PiiCtx = build_pii_ctx(&cfg, pii_flag);
   ```
-- [ ] 4.9 Write unit tests:
+- [x] 4.9 Write unit tests:
   - Test A: `ensure_slm_model` with `cfg.pii.tiers.slm = false` → function returns without touching `model_id` or sidecar. This test requires no network or binary.
   - Test B: `ensure_slm_model` with `tiers.slm = true`, `model_id = Some("smollm2-135m")`, and a real `.gguf` file written to a tmpdir → function returns without download; sidecar handle remains `None`. Use `tempfile::tempdir()` and write a zero-byte file named `smollm2-135m.gguf`.
   - Test C (download-error path): This path calls `download_with_bar` which makes a real HTTP request. Use the mock server pattern from `src/models/mod.rs` tests (lines ~418–440): spin up a `mockito::Server`, point the catalog URL to it, configure it to return a non-200, and verify `cfg.pii.tiers.slm` becomes `false`. If `mockito` is not already a dev-dependency, add it.
   - Do not attempt to test the sidecar-start path in unit tests — `SidecarProcess::start` requires the actual `llama-server` binary.
-- [ ] 4.10 Verify: `cargo test` passes.
+- [x] 4.10 Verify: `cargo test` passes.
 
 ## 5. Tray Path Reorder
 
-- [ ] 5.1 In `src/main.rs` (`run_tray_mode`), reorder the initialization sequence. The new order must be:
+- [x] 5.1 In `src/main.rs` (`run_tray_mode`), reorder the initialization sequence. The new order must be:
   1. `Config::load(...)` — already first, unchanged.
   2. Resolve `config_path` — unchanged.
   3. Add `let mut cfg = cfg_result;` to keep cfg mutable (if not already).
@@ -136,12 +136,12 @@
   7. Call `rt.block_on(ensure_slm_model(&mut cfg, &Arc::new(cfg_mgr.clone()), &sidecar));`
   8. Call `load_proxy_resources(&mut cfg, ...)` — moved to after step 7.
   9. Remaining tray setup and dashboard spawn — pass `sidecar` to `dashboard::run(...)` (completing Task 3.4).
-- [ ] 5.2 Note on logging order: `load_proxy_resources` initializes the tracing subscriber. Log lines from `ensure_slm_model` (step 7) will use the default subscriber (env-filter fallback). This is acceptable — the INFO/WARN messages from `ensure_slm_model` are important enough to show regardless; they will appear on stdout before the full logging setup. Do not attempt to reorder logging init further.
-- [ ] 5.3 Verify: `cargo build` succeeds. If a tray smoke-test is feasible in the CI environment, run it; otherwise confirm manually that `run_tray_mode` does not panic at startup.
+- [x] 5.2 Note on logging order: `load_proxy_resources` initializes the tracing subscriber. Log lines from `ensure_slm_model` (step 7) will use the default subscriber (env-filter fallback). This is acceptable — the INFO/WARN messages from `ensure_slm_model` are important enough to show regardless; they will appear on stdout before the full logging setup. Do not attempt to reorder logging init further.
+- [x] 5.3 Verify: `cargo build` succeeds. If a tray smoke-test is feasible in the CI environment, run it; otherwise confirm manually that `run_tray_mode` does not panic at startup.
 
 ## 6. PII-SETUP.md Documentation
 
-- [ ] 6.1 In `docs/PII-SETUP.md`, insert the following new section between the end of "## Performance Notes" (line 236) and "## Vault Persistence" (line 259). The exact insertion point is after the last line of the Performance Notes section content:
+- [x] 6.1 In `docs/PII-SETUP.md`, insert the following new section between the end of "## Performance Notes" (line 236) and "## Vault Persistence" (line 259). The exact insertion point is after the last line of the Performance Notes section content:
   ```markdown
   ## Choosing a Model
 
@@ -166,11 +166,11 @@
   slower; the timeout (`pii.slm.timeout_ms`, default 5000 ms) controls fail-open
   behavior if the model is too slow.
   ```
-- [ ] 6.2 Verify: the section appears between Performance Notes and Vault Persistence; table renders correctly.
+- [x] 6.2 Verify: the section appears between Performance Notes and Vault Persistence; table renders correctly.
 
 ## 7. OpenSpec: Add Requirement to add-macos-packaging
 
-- [ ] 7.1 In `openspec/changes/add-macos-packaging/specs/model-management/spec.md`, append the following three requirements within the existing `## ADDED Requirements` section (do not add a new `## ADDED Requirements` header — append after the last existing `#### Scenario:` block):
+- [x] 7.1 In `openspec/changes/add-macos-packaging/specs/model-management/spec.md`, append the following three requirements within the existing `## ADDED Requirements` section (do not add a new `## ADDED Requirements` header — append after the last existing `#### Scenario:` block):
 
   ```markdown
   ### Requirement: Auto-Download on First Run
@@ -206,5 +206,5 @@
   - **THEN** no download is initiated and startup proceeds at normal speed
   ```
 
-- [ ] 7.2 Run `openspec validate add-macos-packaging --strict` — confirm the updated change still passes.
-- [ ] 7.3 Run `openspec validate add-model-weight-mgmt --strict` — confirm this change passes.
+- [x] 7.2 Run `openspec validate add-macos-packaging --strict` — confirm the updated change still passes.
+- [x] 7.3 Run `openspec validate add-model-weight-mgmt --strict` — confirm this change passes.
