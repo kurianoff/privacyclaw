@@ -77,17 +77,17 @@ pub fn catalog() -> &'static [ModelInfo] {
         ModelInfo {
             id: "smollm2-135m",
             name: "SmolLM2-135M-Instruct",
-            description: "Smallest SLM for PII disambiguation (~90 MB, ~300 MB RAM)",
-            url: "https://huggingface.co/HuggingFaceTB/SmolLM2-135M-Instruct-GGUF/resolve/main/smollm2-135m-instruct-q4_k_m.gguf",
-            sha256: "",
-            size_mb: 90,
+            description: "Smallest SLM for PII disambiguation (~105 MB, ~300 MB RAM)",
+            url: "https://huggingface.co/bartowski/SmolLM2-135M-Instruct-GGUF/resolve/main/SmolLM2-135M-Instruct-Q4_K_M.gguf",
+            sha256: "2e8040ceae7815abe0dcb3540b9995eaa1fa0d2ca9e797d0a635ae4433c68c2d",
+            size_mb: 105,
         },
         ModelInfo {
             id: "qwen2.5-0.5b",
             name: "Qwen2.5-0.5B-Instruct",
             description: "Compact SLM for PII disambiguation (~400 MB, ~800 MB RAM)",
             url: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf",
-            sha256: "",
+            sha256: "a0ee18ee2bcb22c2b6c95360b292c2c40a2d7a03",
             size_mb: 400,
         },
         ModelInfo {
@@ -95,7 +95,7 @@ pub fn catalog() -> &'static [ModelInfo] {
             name: "Llama-3.2-1B-Instruct",
             description: "Balanced SLM for PII disambiguation (~700 MB, ~1.2 GB RAM)",
             url: "https://huggingface.co/bartowski/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_K_M.gguf",
-            sha256: "",
+            sha256: "ca7732416a22ac248814aadae1fb22505e475a92",
             size_mb: 700,
         },
         ModelInfo {
@@ -103,7 +103,7 @@ pub fn catalog() -> &'static [ModelInfo] {
             name: "Phi-3-mini-4k-instruct",
             description: "High-accuracy SLM for PII disambiguation (~2.3 GB, ~3.5 GB RAM)",
             url: "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf",
-            sha256: "",
+            sha256: "c72c1922442b8e09192da8d5e497a2738dec9d1b",
             size_mb: 2300,
         },
     ];
