@@ -132,6 +132,11 @@ class Privacyclaw < Formula
 
   def install
     bin.install "privacyclaw"
+    virtualenv_install_with_resources using: "python@3.11"
+    bin.install "privacyclaw-slm-sidecar"
+    inreplace bin/"privacyclaw-slm-sidecar",
+              /\A#!.+\n/,
+              "#!#{opt_libexec}/bin/python3\n"
   end
 
   # ── Post-install message ──────────────────────────────────────────────────
