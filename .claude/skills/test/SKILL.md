@@ -18,6 +18,26 @@ Extract from the input:
 - `branch`: the feature branch (`feature/<slug>`)
 - `impl_log`: path to the implementation log
 - `for_next`: context from Development (risk areas, known complexity, gaps)
+- `WORKTREE`: the absolute path to the feature worktree (required;
+  if missing, derive as `$(git rev-parse --show-toplevel)/../worktrees/<branch-slug>`)
+
+Derive `WORKTREE_PARENT` = `dirname(<WORKTREE>)`. The test worktree is a
+sibling: `<WORKTREE_PARENT>/task-tests-<slug>`.
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>` (or the test
+worktree sibling), never in the main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: `<WORKTREE>/<relative-path>`
+- Git commands: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>` (or the test worktree path)
+- Test worktree: created at `<WORKTREE_PARENT>/task-tests-<slug>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** with the
+  appropriate worktree path.
 
 ---
 
@@ -62,10 +82,12 @@ Pass forward:
 
 ## Worktree protocol
 
-Test files are written on a dedicated branch:
+Test files are written on a dedicated branch that is a **sibling** of the
+feature worktree (git cannot nest worktrees):
 
 ```bash
-git worktree add ../worktree-tests -b task/tests-<slug>
+git -C "<WORKTREE>" worktree add "<WORKTREE_PARENT>/task-tests-<slug>" \
+  -b task/tests-<slug>
 ```
 
 **Test Developer and Stress Tester** commit to `task/tests-<slug>`.
@@ -74,9 +96,9 @@ git worktree add ../worktree-tests -b task/tests-<slug>
 After Test Runner confirms all tests pass:
 
 ```bash
-git checkout feature/<slug>
-git merge --no-ff task/tests-<slug> -m "test(<slug>): add test coverage"
-git worktree remove ../worktree-tests
+git -C "<WORKTREE>" merge --no-ff task/tests-<slug> \
+  -m "test(<slug>): add test coverage"
+git -C "<WORKTREE>" worktree remove "<WORKTREE_PARENT>/task-tests-<slug>"
 ```
 
 ---
@@ -88,6 +110,10 @@ git worktree remove ../worktree-tests
 Invoke **pm** and **architect** jointly (or sequentially if teams unavailable)
 with the implementation log and Development handoff context. Task:
 
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read the implementation log at `<impl_log>` and the development context.
 > Decide which test types are needed for each area of the implementation:
 > - Unit tests: individual functions and modules
@@ -105,6 +131,11 @@ with the implementation log and Development handoff context. Task:
 Create the test worktree branch. Invoke **test-developer** with the test plan
 and branch name. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-tests-<slug>`
+> (branch: `task/tests-<slug>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-tests-<slug>`
+>
 > Implement the tests specified in the test plan on branch `task/tests-<slug>`.
 > Think adversarially. For every item in the plan, cover:
 > - Happy path
@@ -121,6 +152,11 @@ and branch name. Task:
 If the test plan includes stress tests, invoke **stress-tester** with the
 Test Developer handoff and branch name. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-tests-<slug>`
+> (branch: `task/tests-<slug>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-tests-<slug>`
+>
 > Implement stress, load, and concurrency tests on branch `task/tests-<slug>`.
 > Cover: concurrent connections, resource exhaustion, backpressure, byte
 > integrity under load, and latency distributions where relevant.
@@ -133,6 +169,11 @@ If no stress tests were planned, skip this step.
 
 Invoke **test-runner** with the full test branch and implementation. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-tests-<slug>`
+> (branch: `task/tests-<slug>`) — do not read or write any
+> files outside this directory. Run `cd "<WORKTREE_PARENT>/task-tests-<slug>" && cargo test`.
+> WORKTREE: `<WORKTREE_PARENT>/task-tests-<slug>`
+>
 > Run the full test suite (`cargo test`) against the current state of
 > `feature/<slug>` merged with `task/tests-<slug>`.
 > Interpret every failure precisely:

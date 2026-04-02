@@ -17,14 +17,36 @@ Extract from the input:
 - `feature`: the feature description
 - `branch`: the feature branch (`feature/<slug>`)
 - `openspec_id`: the OpenSpec change id
-- `tasks_path`: path to `openspec/changes/<id>/tasks.md`
+- `tasks_path`: path to `<WORKTREE>/openspec/changes/<id>/tasks.md`
 - `for_next`: context from Planning (constraints, known risks)
+- `WORKTREE`: the absolute path to the feature worktree (required; this is
+  where all source code, OpenSpec files, and workflow artifacts live)
+
+Derive `WORKTREE_PARENT` = `dirname(<WORKTREE>)`. Per-task worktrees are
+created as siblings under `WORKTREE_PARENT`, not subdirectories of `WORKTREE`
+(git does not support nested worktrees).
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: `<WORKTREE>/<relative-path>`
+- Git commands on the feature branch: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>`
+- Per-task worktrees: created at `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+  (sibling of `<WORKTREE>`, not inside it)
+- **Every agent message must include `WORKTREE: <worktree_path>`** and the
+  per-task branch name so agents know exactly where to work.
 
 ---
 
 ## Critical: PM implementation log
 
-**Maintain a running log at `.claude/workflow/<slug>/impl-log.md`** throughout
+**Maintain a running log at `<WORKTREE>/.claude/workflow/<slug>/impl-log.md`** throughout
 this entire phase. After every task cycle, append:
 
 ```text
@@ -83,25 +105,30 @@ Pass forward:
 
 ## Worktree protocol
 
-Each task runs on a dedicated short-lived branch. Create it before assigning
-to Developer:
+Each task runs on a dedicated short-lived branch that is a **sibling** of the
+feature worktree (git cannot nest worktrees). Create it before assigning to
+Developer:
 
 ```bash
-git worktree add ../worktree-<task-id> -b task/<slug>-<task-id>
+git -C "<WORKTREE>" worktree add "<WORKTREE_PARENT>/task-<slug>-<task-id>" \
+  -b task/<slug>-<task-id>
 ```
 
+Where `WORKTREE_PARENT = dirname(WORKTREE)`.
+
 - **Developer, Refactoring Engineer, Simplifier, Logging Implementer** all
-  commit to `task/<slug>-<task-id>` sequentially. Each agent receives the
-  branch name in their context. Use `isolation: "worktree"` in Agent calls
-  for code-changing agents.
+  commit to `task/<slug>-<task-id>` sequentially. Each agent receives both
+  the task branch name **and `WORKTREE: <WORKTREE_PARENT>/task-<slug>-<task-id>`**
+  in their context. Use `isolation: "worktree"` in Agent calls for
+  code-changing agents.
 - **Contrarian and Architect** read from the task branch but do not commit.
 
 **Merge checkpoint** — after Contrarian approves a task:
 
 ```bash
-git checkout feature/<slug>
-git merge --no-ff task/<slug>-<task-id> -m "task(<task-id>): <task title>"
-git worktree remove ../worktree-<task-id>
+git -C "<WORKTREE>" merge --no-ff task/<slug>-<task-id> \
+  -m "task(<task-id>): <task title>"
+git -C "<WORKTREE>" worktree remove "<WORKTREE_PARENT>/task-<slug>-<task-id>"
 ```
 
 ---
@@ -142,8 +169,12 @@ context from the Planning handoff.
 
 Invoke **developer**. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Implement task `<id>`: `<task description>`.
-> Work on branch `task/<slug>-<task-id>`.
 > Follow project conventions: Rust 2021, tokio, anyhow for app code,
 > thiserror for library crates, tracing for logging.
 > Commit your changes. Produce an Agent Handoff.
@@ -153,6 +184,11 @@ Invoke **developer**. Task:
 Invoke **refactoring-engineer** with the Developer handoff and branch name.
 Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Review the changes on branch `task/<slug>-<task-id>`.
 > Identify and fix: over-long functions, mixed concerns, leaky abstractions,
 > duplicated logic. Refactor in place. Do not change behaviour — all existing
@@ -163,6 +199,11 @@ Task:
 Invoke **simplifier** with the Refactoring Engineer handoff and branch name.
 Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Review the changes on branch `task/<slug>-<task-id>`.
 > Remove: dead code, premature abstractions, over-engineered solutions,
 > unnecessary complexity. Do not nitpick style. Fix only real problems.
@@ -173,6 +214,11 @@ Task:
 Invoke **logging-implementer** with the Simplifier handoff and branch name.
 Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Instrument every new code path on branch `task/<slug>-<task-id>` with
 > structured tracing per the project logging spec:
 > - WARN: lifecycle events (proxy/CA bound, mode started/stopped)
@@ -186,6 +232,10 @@ Task:
 Invoke **contrarian** with the full task handoff chain (all four Agent
 Handoffs) and the branch name. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — read files only within this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Review the complete implementation on branch `task/<slug>-<task-id>`.
 > Consider the code, refactoring, simplification, and logging together.
 > Produce a verdict: approved or challenged.
@@ -202,6 +252,10 @@ If Contrarian's verdict is challenged, split the feedback:
 
 Invoke **architect** with the design-level challenges. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+> (branch: `task/<slug>-<task-id>`) — read files only within this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-<slug>-<task-id>`
+>
 > Review these design-level challenges raised by Contrarian for task `<id>`.
 > For each: decide whether a design change is required.
 > If yes: specify exactly what must change and route it back to Developer.
@@ -278,8 +332,8 @@ Status:    complete  (or: blocked — <reason>)
 Feature:   <feature description>
 Branch:    <branch>
 Artifacts:
-  .claude/workflow/<slug>/impl-log.md
-  openspec/changes/<id>/tasks.md  (updated with completion status)
+  <worktree_path>/.claude/workflow/<slug>/impl-log.md
+  <worktree_path>/openspec/changes/<id>/tasks.md  (updated with completion status)
 Decisions: <bullet list of key implementation decisions>
 For next:  <what Testing needs: completed task summary, any areas of known
             complexity or risk that tests should focus on, known gaps>

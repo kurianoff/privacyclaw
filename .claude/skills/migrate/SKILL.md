@@ -18,10 +18,35 @@ Extract from the input:
 - `scope`: the modernization scope
 - `branch`: the modernize branch (`modernize/<slug>`)
 - `openspec_id`: the OpenSpec change id (`modernize-<slug>`, from Research handoff `OpenSpec` field)
-- `tasks_path`: `openspec/changes/modernize-<slug>/tasks.md` (from Research handoff `Artifacts`)
+- `tasks_path`: `<WORKTREE>/openspec/changes/modernize-<slug>/tasks.md` (from Research handoff `Artifacts`)
 - `migration_plan`: path to the migration plan (from Research handoff `Artifacts`)
 - `for_next`: context from Research (task count per batch, complex tasks,
   low-confidence flags, grouped migration task IDs)
+- `WORKTREE`: the absolute path to the modernize worktree (required when
+  invoked from orchestrator; if missing, derive as
+  `$(git rev-parse --show-toplevel)/../worktrees/modernize-<slug>`)
+
+Derive `WORKTREE_PARENT` = `dirname(<WORKTREE>)`. Per-task worktrees are
+created as siblings: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`.
+
+**Inject into every agent's context:** scope, branch name,
+`WORKTREE: <worktree_path>` (or the specific task worktree path).
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>` or its sibling
+task worktrees, never in the main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes on the modernize branch: `<WORKTREE>/<relative-path>`
+- Git commands on the modernize branch: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>` (or the task worktree path)
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- Per-task worktrees: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+- **Every agent message must include `WORKTREE: <task_worktree_path>`** (the
+  sibling path) so agents commit to the right place.
 
 If the fast-path applies (Research returned only patch/minor updates with no
 migration plan file), read the Audit catalog instead and proceed with
@@ -31,7 +56,7 @@ Batch A only.
 
 ## Critical: migration log
 
-**Maintain a running log at `.claude/workflow/<slug>/migration-log.md`**
+**Maintain a running log at `<WORKTREE>/.claude/workflow/<slug>/migration-log.md`**
 throughout this phase. After every task, append:
 
 ```text
@@ -95,7 +120,9 @@ Each Batch B/C task runs on a dedicated branch. Sanitize dep names for
 branch use: replace `/`, `.`, `+` with `-` and lowercase.
 
 ```bash
-git worktree add ../worktree-migrate-<task-id> -b task/migrate-<slug>-<task-id>
+git -C "<WORKTREE>" worktree add \
+  "<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>" \
+  -b task/migrate-<slug>-<task-id>
 ```
 
 **Cargo.toml serialization rule:** only one worktree may have a Cargo.toml
@@ -112,19 +139,20 @@ when parallel worktrees are merged back.
 **Merge checkpoint** — after Contrarian approves:
 
 ```bash
-git checkout modernize/<slug>
-git merge --no-ff task/migrate-<slug>-<task-id> \
+git -C "<WORKTREE>" merge --no-ff task/migrate-<slug>-<task-id> \
   -m "migrate(<task-id>): <dep> <current> → <target>"
-git worktree remove ../worktree-migrate-<task-id>
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>"
 ```
 
 **Revert checkpoint** — if a task is abandoned:
 
 ```bash
-git worktree remove ../worktree-migrate-<task-id>
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>"
 # Revert the Cargo.toml version bump on modernize/<slug>:
-git revert HEAD --no-edit  # if the bump was the last commit
-# or manually restore the version in Cargo.toml and commit
+git -C "<WORKTREE>" revert HEAD --no-edit  # if the bump was the last commit
+# or manually restore the version in <WORKTREE>/Cargo.toml and commit
 ```
 
 ---
@@ -178,10 +206,10 @@ If reverted or blocked, replace the last two lines with:
 
 ## Task scheduling
 
-Read `openspec/changes/<openspec_id>/tasks.md`. Build a dependency graph
-from the `Depends on:` and `Parallel-safe:` fields in each task section.
+Read `<WORKTREE>/openspec/changes/<openspec_id>/tasks.md`. Build a dependency
+graph from the `Depends on:` and `Parallel-safe:` fields in each task section.
 Independent tasks (no overlapping files, no declared dependencies) may run
-in parallel — with their Cargo.toml bumps applied serially to
+in parallel — with their `<WORKTREE>/Cargo.toml` bumps applied serially to
 `modernize/<slug>` before worktrees are created.
 
 **Source of truth for task status:** the `- [ ]`/`- [x]` checkbox on each
@@ -197,8 +225,9 @@ If resuming: skip every task whose checkbox already reads `- [x]`.
 ### Step 1 — Baseline
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/migrate-baseline.txt
-cargo clippy -- -D warnings 2>&1 | tee -a .claude/workflow/<slug>/migrate-baseline.txt
+cd "<WORKTREE>"
+cargo test 2>&1 | tee "<WORKTREE>/.claude/workflow/<slug>/migrate-baseline.txt"
+cargo clippy -- -D warnings 2>&1 | tee -a "<WORKTREE>/.claude/workflow/<slug>/migrate-baseline.txt"
 ```
 
 Record the baseline in the migration log header. If baseline is broken,
@@ -209,9 +238,10 @@ surface to user and halt.
 For every dep confirmed unused in the migration plan (Audit catalog, Batch
 "unused-removal"):
 
-Edit `Cargo.toml` directly on `modernize/<slug>` to remove the dep entry.
+Edit `<WORKTREE>/Cargo.toml` directly on `modernize/<slug>` to remove the dep entry.
 
 ```bash
+cd "<WORKTREE>"
 cargo build  # verify removal compiles
 cargo test   # verify no regressions
 ```
@@ -224,16 +254,17 @@ Record each removal in the migration log.
 ### Step 3 — Batch A: Tier 1 patch/minor updates
 
 Collect all Tier 1 deps from the migration plan into a single batch. Apply
-all version bumps to `Cargo.toml` on `modernize/<slug>` at once:
+all version bumps to `<WORKTREE>/Cargo.toml` on `modernize/<slug>` at once:
 
 ```bash
+cd "<WORKTREE>"
 cargo update   # resolve new Cargo.lock
 cargo test 2>&1
 cargo clippy -- -D warnings 2>&1
 ```
 
 **If both pass:** record all Tier 1 deps as complete in the migration log.
-In `openspec/changes/<openspec_id>/tasks.md`, mark Batch A done:
+In `<WORKTREE>/openspec/changes/<openspec_id>/tasks.md`, mark Batch A done:
 `- [ ] A complete` → `- [x] A complete`
 Proceed to Batch B.
 
@@ -242,6 +273,7 @@ version bumps one at a time and re-running until the failure disappears. Then:
 
 Invoke **developer** directly on `modernize/<slug>` (no worktree needed):
 
+> Working directory: `<WORKTREE>` (branch: `modernize/<slug>`)
 > These Tier 1 dep bumps caused regressions: `<dep list>`.
 > Failures: `<test names / clippy errors>`.
 > Fix the minimum code needed to restore green. Do not change behavior
@@ -250,6 +282,7 @@ Invoke **developer** directly on `modernize/<slug>` (no worktree needed):
 
 After Developer fixes, invoke **contrarian** to review the fix:
 
+> Working directory: `<WORKTREE>` (branch: `modernize/<slug>`)
 > Review the Batch A fixes committed directly to `modernize/<slug>`.
 > Verify: the fix is minimal, no behavior was changed beyond the dep update,
 > no new tech debt was introduced. Approved or challenged?
@@ -275,23 +308,31 @@ For each task:
 
 On `modernize/<slug>`:
 ```bash
-# Edit Cargo.toml: update dep version(s) for this task
-cargo build 2>&1  # record what breaks — this is the migration target
+# Edit <WORKTREE>/Cargo.toml: update dep version(s) for this task
+cd "<WORKTREE>" && cargo build 2>&1  # record what breaks — this is the migration target
 ```
 
 ```bash
-git worktree add ../worktree-migrate-<task-id> -b task/migrate-<slug>-<task-id>
+git -C "<WORKTREE>" worktree add \
+  "<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>" \
+  -b task/migrate-<slug>-<task-id>
 ```
 
 Inject into every agent's context: task ID, dep name(s), version bump,
 migration notes (from migration plan), file list with specific old→new API
-changes, verification criterion, confidence level, and whether this is a
-grouped migration.
+changes, verification criterion, confidence level, whether this is a grouped
+migration, and `WORKTREE: <WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+(the task worktree absolute path — agents must read, write, and run commands
+exclusively in this directory).
 
 #### Step 4b — Developer: implement migration
 
 Invoke **developer** on the task branch. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`) — do not read or write any
+> files outside this directory.
+>
 > Migrate `<dep>` from `<current>` to `<target>` on branch
 > `task/migrate-<slug>-<task-id>`.
 > The Cargo.toml has already been updated. Fix all compilation errors and
@@ -308,6 +349,10 @@ Invoke **developer** on the task branch. Task:
 
 Invoke **investigator** with the Developer handoff and task context. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`) — search and read files only
+> within this directory.
+>
 > Review the changes on branch `task/migrate-<slug>-<task-id>`.
 > Check for remaining uses of the old API that Developer did not address:
 > - Search for every old API name listed in the migration plan
@@ -327,6 +372,10 @@ Investigator rounds before escalating to Contrarian as a known gap.
 
 Invoke **simplifier** with the last handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`) — modify files only within
+> this directory.
+>
 > Review the migration changes on branch `task/migrate-<slug>-<task-id>`.
 > Remove: compatibility shims that the new API makes unnecessary, adapter
 > types that can be replaced by native new-API equivalents, redundant
@@ -337,6 +386,10 @@ Invoke **simplifier** with the last handoff. Task:
 
 Invoke **logging-implementer** with the Simplifier handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`) — modify files only within
+> this directory.
+>
 > Retrofit every code path touched by the `<dep>` migration on branch
 > `task/migrate-<slug>-<task-id>` with structured 5-level tracing:
 > - WARN: lifecycle events (proxy/CA bound, mode started/stopped)
@@ -349,9 +402,11 @@ Invoke **logging-implementer** with the Simplifier handoff. Task:
 
 Invoke **test-runner**. Task:
 
-> Run `cargo test` and `cargo clippy -- -D warnings` on branch
-> `task/migrate-<slug>-<task-id>`.
-> Compare against `.claude/workflow/<slug>/migrate-baseline.txt`.
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`).
+> Run `cd "<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>" && cargo test`
+> and `cargo clippy -- -D warnings` there.
+> Compare against `<WORKTREE>/.claude/workflow/<slug>/migrate-baseline.txt`.
 > Produce a verdict:
 > - `green` — all previously-passing tests pass, clippy clean
 > - `red` — regressions or new clippy errors (list each: test name, error,
@@ -363,7 +418,7 @@ Invoke **test-runner**. Task:
 chain: Simplifier (4d) → Logging Implementer (4e) → Test Runner (4f).
 
 **Maximum fix iterations: 3.** If still red after 3 full chain repeats,
-revert the task (see worktree protocol). In `openspec/changes/<openspec_id>/tasks.md`,
+revert the task (see worktree protocol). In `<WORKTREE>/openspec/changes/<openspec_id>/tasks.md`,
 update the task's checkbox: `- [ ] <task-id> complete` → `- [ ] <task-id> complete — ✗ REVERTED: <reason>`
 Record `Status: reverted` in the migration log. Move to the next task. Collect reverts for the final report.
 
@@ -371,6 +426,10 @@ Record `Status: reverted` in the migration log. Move to the next task. Collect r
 
 Invoke **contrarian** with the full handoff chain (Steps 4b–4f). Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-migrate-<slug>-<task-id>`
+> (branch: `task/migrate-<slug>-<task-id>`) — read files only within
+> this directory.
+>
 > Review the complete migration of `<dep>` on branch `task/migrate-<slug>-<task-id>`.
 > Verify:
 > - All breaking API changes in the migration plan were addressed
@@ -391,7 +450,7 @@ Invoke **contrarian** with the full handoff chain (Steps 4b–4f). Task:
 indicated step. After fixes, re-run Test Runner and Contrarian.
 
 **Maximum Contrarian rounds: 3.** If not approved after 3 rounds: in
-`openspec/changes/<openspec_id>/tasks.md` update the task's checkbox:
+`<WORKTREE>/openspec/changes/<openspec_id>/tasks.md` update the task's checkbox:
 `- [ ] <task-id> complete` → `- [ ] <task-id> complete — ⚠ BLOCKED: <reason>`
 Record as blocked, do not merge, surface to user in the final report.
 
@@ -401,7 +460,7 @@ After Contrarian approval:
 
 **Emit task-complete progress report** (merged ✓) with running tally.
 
-1. In `openspec/changes/<openspec_id>/tasks.md`, mark the task done:
+1. In `<WORKTREE>/openspec/changes/<openspec_id>/tasks.md`, mark the task done:
    `- [ ] <task-id> complete` → `- [x] <task-id> complete`
 2. Shut down task team if one was created:
    ```text
@@ -423,6 +482,7 @@ After Contrarian approval:
 After all tasks are processed:
 
 ```bash
+cd "<WORKTREE>"
 cargo audit 2>&1          # verify no new advisories introduced
 cargo outdated --depth 1 2>&1   # show what remains (excluded/reverted)
 cargo clippy -- -D warnings 2>&1
@@ -430,7 +490,7 @@ cargo test 2>&1
 openspec validate <openspec_id> --strict
 ```
 
-Record results in `.claude/workflow/<slug>/migrate-final.txt`.
+Record results in `<WORKTREE>/.claude/workflow/<slug>/migrate-final.txt`.
 
 Confirm all tasks in `<tasks_path>` are marked `- [x]`. If any blocked or
 reverted tasks remain with `- [ ]`, the Phase Handoff `Open` field must list them.
@@ -461,10 +521,10 @@ Scope:     <scope>
 Branch:    <branch>
 OpenSpec:  <openspec_id>
 Artifacts:
-  openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
-  .claude/workflow/<slug>/migration-log.md
-  .claude/workflow/<slug>/migrate-baseline.txt
-  .claude/workflow/<slug>/migrate-final.txt
+  <WORKTREE>/openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
+  <WORKTREE>/.claude/workflow/<slug>/migration-log.md
+  <WORKTREE>/.claude/workflow/<slug>/migrate-baseline.txt
+  <WORKTREE>/.claude/workflow/<slug>/migrate-final.txt
 Decisions:
   - <key migration decisions, reverts, and their reasons>
   - openspec validate: clean

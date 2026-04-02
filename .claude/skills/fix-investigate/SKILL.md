@@ -17,6 +17,22 @@ Extract from the input:
 - `symptom`: what the user observed (the bug description)
 - `boundaries`: do-not-touch zones. Record as `none` if omitted.
 - `BRANCH`: the fix branch (if provided by orchestrator; otherwise record as `tbd`)
+- `WORKTREE`: the absolute path to the fix worktree (if provided; otherwise
+  derive as `$(git rev-parse --show-toplevel)/../worktrees/fix-<slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File writes: `<WORKTREE>/<relative-path>`
+- Codebase reads: agents read source files from `<WORKTREE>/` — the main repo
+  working tree must not be read directly during investigation
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  look at the correct copy of the code.
 
 ---
 
@@ -62,6 +78,10 @@ Pass forward:
 
 Invoke **investigator** with the symptom and boundaries. Task:
 
+> Working directory: `<WORKTREE>` — search and read files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Your goal is to find the **exact root cause** of this symptom: `<symptom>`.
 >
 > **Do NOT propose fixes. Do NOT touch any code in `<boundaries>`.**
@@ -107,6 +127,10 @@ Invoke **investigator** with the symptom and boundaries. Task:
 
 Invoke **contrarian** with the Investigator handoff. Task:
 
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Review the root cause diagnosis. Your job is to stress-test the diagnosis —
 > not to propose fixes.
 >
@@ -146,6 +170,10 @@ Invoke **contrarian** with the Investigator handoff. Task:
 
 Pass the Contrarian handoff back to **investigator**. Task:
 
+> Working directory: `<WORKTREE>` — search and read files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Respond to each of Contrarian's challenges:
 >
 > - For each challenged claim: re-read the relevant code and either confirm the
@@ -168,7 +196,7 @@ in the Phase Handoff for the user to resolve.
 
 ### Step 4 — Save Root Cause Analysis
 
-Save the validated RCA to `.claude/workflow/<slug>/rca.md`:
+Save the validated RCA to `<WORKTREE>/.claude/workflow/<slug>/rca.md`:
 
 ```markdown
 # Root Cause Analysis: <symptom description>
@@ -245,13 +273,13 @@ Status:    complete  (or: blocked — <reason>)
 Feature:   fix: <symptom description>
 Branch:    <branch or tbd>
 Artifacts:
-  .claude/workflow/<slug>/rca.md
+  <worktree_path>/.claude/workflow/<slug>/rca.md
 Decisions:
   - Root cause: <file:line> — <one-line mechanism>
   - Confidence: high | medium | low
   - Fix surface: <N> files — <file list>
   - Contrarian rounds: <N> — consensus reached | <unresolved items>
-For next:  RCA is at .claude/workflow/<slug>/rca.md. Plan must scope tasks to
+For next:  RCA is at <worktree_path>/.claude/workflow/<slug>/rca.md. Plan must scope tasks to
            the minimal fix surface identified in the RCA — do not expand scope
            beyond what the root cause requires. Fix surface: <file list>.
            Confidence: <level>. <Any specific caution for planning if confidence

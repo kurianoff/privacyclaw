@@ -18,6 +18,28 @@ Extract from the input:
 - `branch`: the modernize branch (`modernize/<slug>`)
 - `openspec_id`: the OpenSpec change id (from Migrate handoff `OpenSpec` field)
 - `for_next`: context from Migrate (codebase health, known blockers)
+- `WORKTREE`: the absolute path to the modernize worktree (required when
+  invoked from orchestrator; if missing, derive as
+  `$(git rev-parse --show-toplevel)/../worktrees/modernize-<slug>`)
+
+Derive `WORKTREE_PARENT` = `dirname(<WORKTREE>)`. The upgrade worktree is
+created as a sibling: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`.
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>` or its sibling
+upgrade worktree, never in the main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes on the modernize branch: `<WORKTREE>/<relative-path>`
+- Git commands on the modernize branch: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>` (or the upgrade worktree path)
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- Upgrade worktree: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+- **Every agent message must include `WORKTREE: <upgrade_worktree_path>`** so
+  agents know exactly where to work.
 
 ---
 
@@ -110,7 +132,9 @@ Handoff to tell the user anything.
 
 Invoke **general-purpose** (with web search). Task:
 
-> 1. Read `Cargo.toml` and record the current `edition` field.
+> **All file reads must use `<WORKTREE>/<path>`. Never read files outside the worktree.**
+>
+> 1. Read `<WORKTREE>/Cargo.toml` and record the current `edition` field.
 > 2. Web search: "rust stable edition latest <current year>" to identify
 >    the latest stable edition.
 > 3. If current edition equals latest: produce a handoff with
@@ -121,7 +145,7 @@ Invoke **general-purpose** (with web search). Task:
 >    limitations" to surface any reported problems with the automated tool.
 > 6. Web search: "rust <target> edition breaking changes production experience"
 >    for community reports of pain points.
-> 7. Also read `Cargo.toml` for the `rust-version` field (MSRV). After upgrade,
+> 7. Also read `<WORKTREE>/Cargo.toml` for the `rust-version` field (MSRV). After upgrade,
 >    the edition must be compatible with the declared MSRV, or MSRV must be bumped.
 >
 > Produce an Agent Handoff with:
@@ -161,8 +185,9 @@ and halt with a blocked Phase Handoff.
 ### Step 3 — Baseline
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/upgrade-baseline.txt
-cargo clippy -- -D warnings 2>&1 | tee -a .claude/workflow/<slug>/upgrade-baseline.txt
+cd "<WORKTREE>"
+cargo test 2>&1 | tee "<WORKTREE>/.claude/workflow/<slug>/upgrade-baseline.txt"
+cargo clippy -- -D warnings 2>&1 | tee -a "<WORKTREE>/.claude/workflow/<slug>/upgrade-baseline.txt"
 ```
 
 If baseline is broken, surface to user and halt. The edition upgrade cannot
@@ -171,25 +196,32 @@ proceed on a broken baseline.
 ### Step 4 — Create worktree and run cargo fix
 
 ```bash
-git worktree add ../worktree-upgrade -b task/upgrade-<slug>-edition
+git -C "<WORKTREE>" worktree add \
+  "<WORKTREE_PARENT>/task-upgrade-<slug>-edition" \
+  -b task/upgrade-<slug>-edition
 ```
 
 Invoke **general-purpose** on this branch. Task:
 
-> Working in worktree `../worktree-upgrade` on branch
-> `task/upgrade-<slug>-edition`:
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — run all commands and edit all
+> files within this directory only.
 >
 > 1. Run `cargo fix --edition` exactly once — do not run it twice, it is
 >    not idempotent:
 >    ```bash
->    cargo fix --edition 2>&1 | tee .claude/workflow/<slug>/cargo-fix-output.txt
+>    cd "<WORKTREE_PARENT>/task-upgrade-<slug>-edition" && \
+>      cargo fix --edition 2>&1 | tee "<WORKTREE>/.claude/workflow/<slug>/cargo-fix-output.txt"
 >    ```
-> 2. Edit `Cargo.toml`: change the `edition` field to `"<target>"`.
-> 3. Run `cargo build 2>&1` and record every remaining error and warning
->    that `cargo fix` did not resolve. These are the manual fixes needed.
-> 4. Run `cargo test 2>&1` and record which tests pass and which fail
->    after `cargo fix` alone (before any Developer manual fixes). Save as
->    `.claude/workflow/<slug>/post-fix-baseline.txt`.
+> 2. Edit `<WORKTREE_PARENT>/task-upgrade-<slug>-edition/Cargo.toml`:
+>    change the `edition` field to `"<target>"`.
+> 3. Run `cd "<WORKTREE_PARENT>/task-upgrade-<slug>-edition" && cargo build 2>&1`
+>    and record every remaining error and warning that `cargo fix` did not
+>    resolve. These are the manual fixes needed.
+> 4. Run `cd "<WORKTREE_PARENT>/task-upgrade-<slug>-edition" && cargo test 2>&1`
+>    and record which tests pass and which fail after `cargo fix` alone
+>    (before any Developer manual fixes). Save as
+>    `<WORKTREE>/.claude/workflow/<slug>/post-fix-baseline.txt`.
 >    This separates "cargo fix broke this" from "manual fix broke this".
 > 5. Commit the `cargo fix` output and `Cargo.toml` edition change.
 >
@@ -203,6 +235,10 @@ Invoke **general-purpose** on this branch. Task:
 
 Invoke **investigator** with the Step 4 handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — search and read files only
+> within this directory.
+>
 > Review the `cargo fix` output on branch `task/upgrade-<slug>-edition`.
 > Catalog everything that still needs manual attention:
 > - Each remaining compilation error: file:line, error text, likely cause
@@ -214,7 +250,8 @@ Invoke **investigator** with the Step 4 handoff. Task:
 > - Any patterns that `cargo fix` handled technically but that are
 >   non-idiomatic for the `<target>` edition (e.g. it added a workaround
 >   where the idiomatic new API exists)
-> - Verify: does the `rust-version` field in `Cargo.toml` need bumping
+> - Verify: does the `rust-version` field in
+>   `<WORKTREE_PARENT>/task-upgrade-<slug>-edition/Cargo.toml` need bumping
 >   to match the new edition's MSRV requirements?
 >
 > Do NOT propose fixes. Produce an Agent Handoff with a prioritized list
@@ -225,8 +262,13 @@ Invoke **investigator** with the Step 4 handoff. Task:
 If Step 5 found remaining errors or warnings, invoke **developer** on the
 upgrade branch. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — modify files only within
+> this directory.
+>
 > `cargo fix --edition` has run and the edition is now `"<target>"` in
-> `Cargo.toml`. The following issues remain and need manual fixes:
+> `<WORKTREE_PARENT>/task-upgrade-<slug>-edition/Cargo.toml`.
+> The following issues remain and need manual fixes:
 >
 > Errors (must fix): `<list from Investigator>`
 > Must-fix warnings: `<list from Investigator>`
@@ -248,6 +290,10 @@ If Step 5 found no remaining issues, skip this step.
 
 Invoke **simplifier** with the last handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — modify files only within
+> this directory.
+>
 > Review all changes on branch `task/upgrade-<slug>-edition` — both the
 > `cargo fix` output and any Developer manual fixes.
 > Remove: `#[allow(...)]` suppressions that `cargo fix` added automatically
@@ -260,6 +306,10 @@ Invoke **simplifier** with the last handoff. Task:
 
 Invoke **logging-implementer** with the Simplifier handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — modify files only within
+> this directory.
+>
 > Retrofit every code path touched by the edition upgrade on branch
 > `task/upgrade-<slug>-edition` with structured 5-level tracing:
 > - WARN: lifecycle events
@@ -272,10 +322,12 @@ Invoke **logging-implementer** with the Simplifier handoff. Task:
 
 Invoke **test-runner**. Task:
 
-> Run `cargo test` and `cargo clippy -- -D warnings` on branch
-> `task/upgrade-<slug>-edition`.
-> Compare against `.claude/workflow/<slug>/upgrade-baseline.txt`.
-> Also compare against `.claude/workflow/<slug>/post-fix-baseline.txt`
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`).
+> Run `cd "<WORKTREE_PARENT>/task-upgrade-<slug>-edition" && cargo test`
+> and `cargo clippy -- -D warnings` there.
+> Compare against `<WORKTREE>/.claude/workflow/<slug>/upgrade-baseline.txt`.
+> Also compare against `<WORKTREE>/.claude/workflow/<slug>/post-fix-baseline.txt`
 > to distinguish: did a manual fix or simplification cause a new regression
 > vs was it already broken after `cargo fix`?
 > Produce a verdict:
@@ -293,7 +345,8 @@ repeat: Simplifier (Step 7) → Logging Implementer (Step 8) → Test Runner
 revert without merging:
 
 ```bash
-git worktree remove ../worktree-upgrade
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-upgrade-<slug>-edition"
 ```
 
 Produce a Phase Handoff with `Status: blocked — edition upgrade could not
@@ -304,10 +357,14 @@ be completed cleanly. Manual intervention required. Remaining failures:
 
 Invoke **contrarian** with the full handoff chain (Steps 1–9). Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-upgrade-<slug>-edition`
+> (branch: `task/upgrade-<slug>-edition`) — read files only within
+> this directory.
+>
 > Review the complete edition upgrade on branch `task/upgrade-<slug>-edition`.
 > Verify:
 > - `cargo fix` output was applied correctly (check
->   `.claude/workflow/<slug>/cargo-fix-output.txt`)
+>   `<WORKTREE>/.claude/workflow/<slug>/cargo-fix-output.txt`)
 > - Manual fixes in Step 6 use idiomatic `<target>` edition patterns, not
 >   minimal workarounds
 > - No `<current>` edition idioms remain where `<target>` has a proper
@@ -335,10 +392,10 @@ override and proceed to merge, or defer the upgrade.
 After Contrarian approval (or user override):
 
 ```bash
-git checkout modernize/<slug>
-git merge --no-ff task/upgrade-<slug>-edition \
+git -C "<WORKTREE>" merge --no-ff task/upgrade-<slug>-edition \
   -m "upgrade: Rust edition <current> → <target>"
-git worktree remove ../worktree-upgrade
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-upgrade-<slug>-edition"
 ```
 
 ---
@@ -376,9 +433,9 @@ Scope:     <scope>
 Branch:    <branch>
 OpenSpec:  <openspec_id>
 Artifacts:
-  .claude/workflow/<slug>/upgrade-baseline.txt
-  .claude/workflow/<slug>/post-fix-baseline.txt
-  .claude/workflow/<slug>/cargo-fix-output.txt
+  <WORKTREE>/.claude/workflow/<slug>/upgrade-baseline.txt
+  <WORKTREE>/.claude/workflow/<slug>/post-fix-baseline.txt
+  <WORKTREE>/.claude/workflow/<slug>/cargo-fix-output.txt
 Decisions:
   - Edition upgraded: <current> → <target>
   - Files changed by cargo fix: <count>
