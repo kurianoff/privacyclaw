@@ -256,6 +256,33 @@ as hyphens (`en-US`).
 
 ---
 
+## Choosing a Model
+
+When Tier 3 is enabled, privacyclaw uses a locally-running GGUF model. The
+four catalog models differ in size, memory usage, and detection quality:
+
+| Model ID         | Size   | RAM    | Latency (typical) | Quality |
+|------------------|--------|--------|-------------------|---------|
+| smollm2-135m     | 90 MB  | 300 MB | ~100 ms/turn      | Good    |
+| qwen2.5-0.5b     | 400 MB | 800 MB | ~250 ms/turn      | Better  |
+| llama-3.2-1b     | 700 MB | 1.2 GB | ~500 ms/turn      | Better+ |
+| phi-3-mini-3.8b  | 2.3 GB | 3.5 GB | ~1–2 s/turn       | Best    |
+
+**Recommendation:** Start with `smollm2-135m`. It is auto-downloaded on first
+run when T3 is enabled and no model is active. If you need higher accuracy for
+edge-case PII, upgrade to `qwen2.5-0.5b` with:
+
+```sh
+privacyclaw models install qwen2.5-0.5b
+privacyclaw models activate qwen2.5-0.5b
+```
+
+Latency figures assume Apple M-series hardware. Intel/AMD CPUs will be 2–3x
+slower; the timeout (`pii.slm.timeout_ms`, default 5000 ms) controls fail-open
+behavior if the model is too slow.
+
+---
+
 ## Vault Persistence
 
 Each conversation gets its own `PiiVault` — a bidirectional mapping table

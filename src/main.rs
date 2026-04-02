@@ -365,33 +365,38 @@ fn run_tray_mode(cli: Cli) -> Result<()> {
         .map(|p| p.to_path_buf())
         .unwrap_or_else(|| config::default_config_dir().join("config.toml"));
 
-    let resources = load_proxy_resources(&mut cfg, cli.log_file.as_deref(), pii_flag, true)?;
-
-    let dashboard_url = format!("http://{}", cfg.proxy.dashboard);
-    let shutdown = Arc::new(Notify::new());
-
     let rt = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
         .context("failed to build tokio runtime")?;
 
+    let cfg_mgr = ConfigManager::new(cfg.clone(), Some(config_path.clone()));
+
+    let sidecar: dashboard::SidecarHandle = Arc::new(std::sync::Mutex::new(None));
+    rt.block_on(ensure_slm_model(&mut cfg, &cfg_mgr, &sidecar));
+
+    let resources = load_proxy_resources(&mut cfg, cli.log_file.as_deref(), pii_flag, true)?;
+
+    let dashboard_url = format!("http://{}", cfg.proxy.dashboard);
+    let shutdown = Arc::new(Notify::new());
+
     let cfg = Arc::new(cfg);
-    let cfg_mgr = ConfigManager::new((*cfg).clone(), Some(config_path));
 
     // ── Permanent tasks (dashboard, PII eviction, log rotation) ────────────
     {
         let addr = cfg.proxy.dashboard.clone();
         let proxy_state = dashboard::ProxyState::new();
         let download_tracker = crate::models::DownloadTracker::new();
-        let (s, w, m, ps, dt) = (
+        let (s, w, m, ps, dt, sc) = (
             resources.store.clone(),
             resources.ws_tx.clone(),
             cfg_mgr.clone(),
             proxy_state,
             download_tracker,
+            sidecar.clone(),
         );
         rt.spawn(async move {
-            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt).await {
+            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt, sc).await {
                 tracing::error!(err = %e, "dashboard error");
             }
         });
@@ -576,6 +581,70 @@ async fn cmd_init(cfg: &Config, install_ca: bool, network: bool) -> Result<()> {
     Ok(())
 }
 
+/// Ensures a T3 model is available before the proxy starts.
+///
+/// If T3 is enabled but no model is present on disk, auto-downloads `smollm2-135m`,
+/// persists the updated `model_id` to config, and starts the llama-server sidecar.
+/// On any failure, T3 is disabled for this session (fail-open) and the function returns.
+async fn ensure_slm_model(
+    cfg: &mut Config,
+    cfg_mgr: &Arc<ConfigManager>,
+    sidecar: &dashboard::SidecarHandle,
+) {
+    if !cfg.pii.tiers.slm {
+        tracing::debug!("T3 disabled; skipping auto-download");
+        return;
+    }
+    let models_dir = cfg.resolved_models_dir();
+    if let Some(ref id) = cfg.pii.slm.model_id.clone() {
+        if !id.is_empty() && crate::models::is_downloaded(&models_dir, id) {
+            tracing::debug!(model_id = %id, "T3 model already present, skipping auto-download");
+            return;
+        }
+    }
+
+    tracing::info!(model_id = "smollm2-135m", size_mb = 90, "T3 enabled but no model active; auto-downloading");
+    let smollm2_info = &crate::models::catalog()[0]; // smollm2-135m is index 0
+    let result = crate::models::download_with_bar(smollm2_info, &models_dir).await;
+
+    match result {
+        Err(e) => {
+            tracing::warn!(err = %e, "auto-download failed; T3 disabled for this session");
+            cfg.pii.tiers.slm = false;
+            return;
+        }
+        Ok(()) => { /* continue to success branch */ }
+    }
+
+    cfg.pii.slm.model_id = Some("smollm2-135m".to_string());
+
+    let patch = serde_json::json!({"pii": {"slm": {"model_id": "smollm2-135m"}}});
+    if let Err(e) = cfg_mgr.patch(patch).await {
+        tracing::warn!(err = %e, "config patch failed; model_id not persisted");
+    } else if let Err(e) = cfg_mgr.save_to_disk().await {
+        tracing::warn!(err = %e, "config save failed; model_id not persisted across restarts");
+    }
+
+    let bin = dashboard::llama_server_bin_path();
+    let model_file = models_dir.join("smollm2-135m-instruct-q4_k_m.gguf");
+    match tokio::task::spawn_blocking(move || {
+        crate::pii::tier3::SidecarProcess::start(&bin, &model_file, 16442, 30u64)
+    }).await {
+        Ok(Ok(proc)) => {
+            if let Ok(mut guard) = sidecar.lock() { *guard = Some(proc); }
+            tracing::info!(model_id = "smollm2-135m", "model downloaded and sidecar started");
+        }
+        Ok(Err(e)) => {
+            tracing::warn!(err = %e, "sidecar failed to start; T3 disabled for this session");
+            cfg.pii.tiers.slm = false;
+        }
+        Err(e) => {
+            tracing::warn!(err = %e, "sidecar spawn_blocking panicked; T3 disabled for this session");
+            cfg.pii.tiers.slm = false;
+        }
+    }
+}
+
 async fn cmd_start(
     cfg: Config,
     cfg_mgr: Arc<ConfigManager>,
@@ -583,6 +652,9 @@ async fn cmd_start(
     mode: Option<StartMode>,
     tray_shutdown: Arc<Notify>,
 ) -> Result<()> {
+    let mut cfg = cfg;
+    let sidecar: dashboard::SidecarHandle = Arc::new(std::sync::Mutex::new(None));
+    ensure_slm_model(&mut cfg, &cfg_mgr, &sidecar).await;
     let ca_dir = default_ca_dir();
     let bundle = ca::load_ca(&ca_dir)?
         .context("CA not initialized. Run `privacyclaw init` first.")?;
@@ -672,9 +744,9 @@ async fn cmd_start(
 
     let dashboard_task = {
         let addr = cfg.proxy.dashboard.clone();
-        let (s, w, m, ps, dt) = (store.clone(), ws_tx.clone(), cfg_mgr.clone(), proxy_state.clone(), download_tracker.clone());
+        let (s, w, m, ps, dt, sc) = (store.clone(), ws_tx.clone(), cfg_mgr.clone(), proxy_state.clone(), download_tracker.clone(), sidecar.clone());
         tokio::spawn(async move {
-            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt).await {
+            if let Err(e) = dashboard::run(&addr, s, w, m, ps, dt, sc).await {
                 tracing::error!(err = %e, detail = ?e, "dashboard error");
             }
         })
@@ -1043,5 +1115,95 @@ mod extract_tests {
         let dest_bin = dest_dir.path().join("llama-server");
         let result = extract_llama_server(empty_dir.path(), &dest_bin);
         assert!(result.is_err(), "missing source should return error");
+    }
+}
+
+#[cfg(test)]
+mod ensure_slm_model_tests {
+    use super::*;
+    use crate::config::{Config, ConfigManager};
+    use tempfile::tempdir;
+
+    fn make_sidecar() -> dashboard::SidecarHandle {
+        Arc::new(std::sync::Mutex::new(None))
+    }
+
+    /// Test A: T3 disabled → ensure_slm_model returns immediately without touching model_id or sidecar.
+    #[tokio::test]
+    async fn test_a_slm_disabled_skips_download() {
+        let mut cfg = Config::default();
+        cfg.pii.tiers.slm = false;
+        let cfg_mgr = ConfigManager::new(cfg.clone(), None);
+        let sidecar = make_sidecar();
+
+        ensure_slm_model(&mut cfg, &cfg_mgr, &sidecar).await;
+
+        assert!(!cfg.pii.tiers.slm, "T3 should remain disabled");
+        assert!(cfg.pii.slm.model_id.is_none(), "model_id should be untouched");
+        assert!(sidecar.lock().unwrap().is_none(), "sidecar should be untouched");
+    }
+
+    /// Test B: T3 enabled, model_id set, GGUF file exists on disk → no download, sidecar unchanged.
+    ///
+    /// The zero-byte file simulates a downloaded model. `is_downloaded` checks file existence only.
+    #[tokio::test]
+    async fn test_b_model_already_present_skips_download() {
+        let tmp = tempdir().unwrap();
+        let models_dir = tmp.path();
+
+        // A zero-byte GGUF file is enough for is_downloaded() to return true.
+        std::fs::write(models_dir.join("smollm2-135m.gguf"), b"").unwrap();
+
+        let mut cfg = Config::default();
+        cfg.pii.tiers.slm = true;
+        cfg.pii.slm.model_id = Some("smollm2-135m".to_string());
+        cfg.pii.models_dir = models_dir.to_string_lossy().to_string();
+
+        let cfg_mgr = ConfigManager::new(cfg.clone(), None);
+        let sidecar = make_sidecar();
+
+        ensure_slm_model(&mut cfg, &cfg_mgr, &sidecar).await;
+
+        assert!(cfg.pii.tiers.slm, "T3 should remain enabled");
+        assert_eq!(cfg.pii.slm.model_id.as_deref(), Some("smollm2-135m"));
+        assert!(sidecar.lock().unwrap().is_none(), "sidecar not started (already present path)");
+    }
+
+    /// Test C: download_with_bar returns Err on non-200 from a mockito server.
+    ///
+    /// This tests the download error branch exercised by ensure_slm_model when
+    /// the download fails. We use Box::leak to produce a `&'static str` URL pointing
+    /// at the local mock server. This is a test-only pattern; the leaked memory is
+    /// reclaimed when the test process exits.
+    #[tokio::test]
+    async fn test_c_download_failure_disables_t3() {
+        let tmp = tempdir().unwrap();
+        let models_dir = tmp.path();
+
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/smollm2-135m-instruct-q4_k_m.gguf")
+            .with_status(503)
+            .with_body("service unavailable")
+            .create_async()
+            .await;
+
+        // Build a static URL string using Box::leak (valid for the test process lifetime).
+        let url: &'static str =
+            Box::leak(format!("{}/smollm2-135m-instruct-q4_k_m.gguf", server.url()).into_boxed_str());
+
+        // Build a static ModelInfo pointing at the mock server.
+        let mock_info: &'static crate::models::ModelInfo =
+            Box::leak(Box::new(crate::models::ModelInfo {
+                id: "smollm2-135m",
+                name: "SmolLM2-135M-Instruct",
+                description: "test mock",
+                url,
+                sha256: "",
+                size_mb: 1,
+            }));
+
+        let result = crate::models::download_with_bar(mock_info, models_dir).await;
+        assert!(result.is_err(), "download_with_bar must return Err on HTTP 503");
     }
 }
