@@ -144,3 +144,7 @@ path = "tests/config_cmd_test.rs"
 [[test]]
 name = "sleep_wake_regression_test"
 path = "tests/sleep_wake_regression_test.rs"
+
+[[test]]
+name = "model_weight_mgmt_test"
+path = "tests/model_weight_mgmt_test.rs"
