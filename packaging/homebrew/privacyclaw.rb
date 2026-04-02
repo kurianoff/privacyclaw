@@ -166,6 +166,18 @@ class Privacyclaw < Formula
 
         privacyclaw uninstall
         brew uninstall privacyclaw
+
+      T3 PII pipeline (SLM sidecar):
+
+        On first run with T3 enabled, privacyclaw auto-downloads the smollm2-135m
+        model (~135 MB). To manage models manually:
+
+          privacyclaw models install <model-name>
+
+        The Python sidecar is available for advanced or debugging use:
+
+          privacyclaw-slm-sidecar --version
+          SIDECAR_PORT=16442 privacyclaw-slm-sidecar
     EOS
   end
 
