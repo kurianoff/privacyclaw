@@ -33,6 +33,7 @@ class Privacyclaw < Formula
   # ── Dependencies ──────────────────────────────────────────────────────────
   # llama.cpp provides llama-server for Tier 3 standalone PII protection.
   depends_on "llama.cpp"
+  depends_on "python@3.11"
 
   # ── Install ───────────────────────────────────────────────────────────────
 
