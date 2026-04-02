@@ -12,7 +12,12 @@ use std::sync::{Arc, Mutex};
 
 /// Shared handle for the running llama-server sidecar process.
 /// Setting the Option to None drops the SidecarProcess, which kills the child.
-type SidecarHandle = Arc<Mutex<Option<crate::pii::tier3::SidecarProcess>>>;
+pub(crate) type SidecarHandle = Arc<Mutex<Option<crate::pii::tier3::SidecarProcess>>>;
+
+/// Returns the path to the `llama-server` binary in the privacyclaw config dir.
+pub(crate) fn llama_server_bin_path() -> std::path::PathBuf {
+    crate::config::default_config_dir().join("bin/llama-server")
+}
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{broadcast, Notify};
@@ -105,10 +110,10 @@ pub async fn run(
     cfg_mgr: Arc<ConfigManager>,
     proxy_state: Arc<ProxyState>,
     download_tracker: crate::models::DownloadTracker,
+    sidecar: SidecarHandle,
 ) -> Result<()> {
     let listener = TcpListener::bind(addr).await?;
     tracing::warn!(addr = %addr, "dashboard bound");
-    let sidecar: SidecarHandle = Arc::new(Mutex::new(None));
 
     // Forward model download progress/error events into the WS broadcast channel.
     let (dl_progress_tx, mut dl_progress_rx) =
@@ -471,7 +476,7 @@ async fn handle_http(
             }
             // §5.6: Stop any existing sidecar and start a new one for this model.
             let model_file = crate::models::model_path(&models_dir, model_id);
-            let llama_server_bin = crate::config::default_config_dir().join("bin/llama-server");
+            let llama_server_bin = llama_server_bin_path();
             // Kill old sidecar first (dropping SidecarProcess kills the child).
             if let Ok(mut guard) = sidecar.lock() {
                 *guard = None;

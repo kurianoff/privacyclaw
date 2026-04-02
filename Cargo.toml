@@ -63,6 +63,7 @@ tray = ["dep:tray-icon", "dep:objc2"]
 tokio = { version = "1", features = ["full", "test-util"] }
 tempfile = "3"
 tracing-test = { version = "0.2", features = ["no-env-filter"] }
+mockito = "1"
 
 [[test]]
 name = "pii_roundtrip_test"

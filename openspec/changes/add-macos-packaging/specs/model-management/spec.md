@@ -81,3 +81,35 @@ The system SHALL report disk usage for downloaded models and allow deleting a mo
 - **WHEN** a DELETE request is made to `/api/models/:id`
 - **AND** the model is currently active
 - **THEN** a 409 Conflict response is returned with `"error": "deactivate model before deleting"`
+
+### Requirement: Auto-Download on First Run
+
+When T3 is enabled in config (`pii.tiers.slm = true`) but no model is active
+(either `pii.slm.model_id` is unset or the model file is absent from
+`models_dir`), the system SHALL automatically download `smollm2-135m` before
+starting the sidecar. The download MUST block proxy startup until complete,
+display a progress bar, log an INFO message before downloading. On success the
+system MUST update `pii.slm.model_id` in config, persist to disk, and start
+the llama-server sidecar. On failure the system MUST log a WARN, disable T3
+for this session (fail-open), and continue startup without Tier 3.
+
+#### Scenario: T3 enabled, no model present
+
+- **GIVEN** `pii.tiers.slm = true` and no model file in `models_dir`
+- **WHEN** the user runs `privacyclaw start`
+- **THEN** `smollm2-135m` is downloaded with a terminal progress bar
+- **AND** startup completes with T3 active using `smollm2-135m`
+
+#### Scenario: Auto-download fails, proxy continues
+
+- **GIVEN** `pii.tiers.slm = true` and no model file in `models_dir`
+- **WHEN** the user runs `privacyclaw start` and the download fails (no network, server error, or checksum mismatch)
+- **THEN** a WARN is logged with the failure reason
+- **AND** T3 is disabled for this session
+- **AND** the proxy starts normally with T1/T2 protection only
+
+#### Scenario: Model already present, no auto-download
+
+- **GIVEN** `pii.tiers.slm = true` and a valid model file exists in `models_dir`
+- **WHEN** the user runs `privacyclaw start`
+- **THEN** no download is initiated and startup proceeds at normal speed
