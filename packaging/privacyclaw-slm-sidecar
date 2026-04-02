@@ -21,6 +21,11 @@ Environment variables:
 # Must run before any other import so the error message is shown immediately.
 import sys
 
+# ── Version flag (must precede dependency guard) ──────────────────────────────
+if len(sys.argv) > 1 and sys.argv[1] in ("--version", "-V"):
+    print("privacyclaw-slm-sidecar 0.1.0")
+    sys.exit(0)
+
 _MISSING = []
 for _pkg in ("fastapi", "uvicorn", "httpx", "pydantic"):
     try:
