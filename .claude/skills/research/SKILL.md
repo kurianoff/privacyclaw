@@ -19,6 +19,24 @@ Extract from the input:
 - `audit_catalog`: path to the audit catalog (from Audit handoff `Artifacts`)
 - `for_next`: context from Audit (Tier 3 dep names, conflict warnings, complexity flags)
 - `user_exclusions`: any additional deps the user excluded at the Audit gate
+- `WORKTREE`: the absolute path to the modernize worktree (required when
+  invoked from orchestrator; if missing, derive as
+  `$(git rev-parse --show-toplevel)/../worktrees/modernize-<slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: `<WORKTREE>/<relative-path>`
+- Git commands: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  read and write the correct copy of the code.
 
 ---
 
@@ -99,11 +117,14 @@ user exclusions. Task:
 
 Invoke **investigator** with the Step 1 handoff and audit catalog. Task:
 
+> **All file searches must be performed within `<WORKTREE>`. Never read or
+> search files outside the worktree.**
+>
 > For each Tier 2 and Tier 3 dep, using the specific old API names from the
 > migration notes:
-> - Search `<scope>` exhaustively for every usage of each old API: function
->   calls, type annotations, trait implementations, `use` imports, feature
->   flags in `Cargo.toml`
+> - Search `<WORKTREE>` exhaustively (limiting to `<scope>` if a subdirectory)
+>   for every usage of each old API: function calls, type annotations, trait
+>   implementations, `use` imports, feature flags in `<WORKTREE>/Cargo.toml`
 > - Cross-check against the Audit catalog's "files affected" list — identify
 >   any files the Audit missed
 > - Identify **compatibility shims**: wrappers, adapter types, or
@@ -144,15 +165,20 @@ Task:
 > - Migration guide URL
 > - Explicit dependencies on other tasks (must complete X before Y)
 >
-> Save the draft plan. Produce an Agent Handoff with the task list.
+> Save the draft plan to `<WORKTREE>/.claude/workflow/<slug>/migration-plan-draft.md`.
+> Produce an Agent Handoff with the task list.
 
 ### Step 4 — Investigator: verify plan completeness
 
 Invoke **investigator** with the Architect handoff. Task:
 
-> Review the draft migration plan. For each task:
+> **All file searches must be performed within `<WORKTREE>`. Never read or
+> search files outside the worktree.**
+>
+> Review the draft migration plan at `<WORKTREE>/.claude/workflow/<slug>/migration-plan-draft.md`.
+> For each task:
 > - Verify the file list is complete — are there any usages of the old API
->   not listed in the plan's per-file changes?
+>   not listed in the plan's per-file changes? Search `<WORKTREE>` to confirm.
 > - Verify the dependency ordering is correct — if task B touches a file
 >   that task A also modifies, is B correctly listed as dependent on A?
 > - Identify any task marked "trivial" or "moderate" where the impact map
@@ -166,6 +192,10 @@ Invoke **investigator** with the Architect handoff. Task:
 Invoke **contrarian** with all prior handoffs and the draft migration plan.
 Task:
 
+> **All file reads must use `<WORKTREE>/<path>`. Never read files outside the worktree.**
+> When the task requires checking the codebase (e.g. for pins, comments), read
+> `<WORKTREE>/Cargo.toml` and files within `<WORKTREE>`.
+>
 > Challenge the migration plan on every dimension:
 >
 > **Exclusions — should we update this at all?**
@@ -207,6 +237,8 @@ Task:
 
 Pass the Contrarian and Investigator handoffs to **architect**. Task:
 
+> **All file reads and writes must use `<WORKTREE>/<path>`.**
+>
 > Incorporate all Contrarian and Investigator findings:
 > - Remove excluded deps from the plan
 > - Revise complexity estimates where challenged
@@ -215,10 +247,10 @@ Pass the Contrarian and Investigator handoffs to **architect**. Task:
 > - Mark low-confidence tasks explicitly
 > - Re-sequence if needed after removals
 >
-> Save the final plan to `.claude/workflow/<slug>/migration-plan.md`.
+> Save the final plan to `<WORKTREE>/.claude/workflow/<slug>/migration-plan.md`.
 > Produce an Agent Handoff confirming all findings addressed.
 
-Save `.claude/workflow/<slug>/migration-plan.md`:
+Save `<WORKTREE>/.claude/workflow/<slug>/migration-plan.md`:
 
 ```markdown
 # Migration Plan
@@ -275,8 +307,8 @@ Migrate in dependency order.
 Invoke **pm** with the finalized migration plan. Task:
 
 > Using the validated migration plan, complete the OpenSpec change `modernize-<slug>`:
-> 1. Update `openspec/changes/modernize-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
-> 2. Create `openspec/changes/modernize-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
+> 1. Update `<WORKTREE>/openspec/changes/modernize-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
+> 2. Create `<WORKTREE>/openspec/changes/modernize-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
 >    ```markdown
 >    # Tasks: Modernize <scope>
 >    Run `cargo test && cargo clippy -- -D warnings` after every merged task.
@@ -300,8 +332,8 @@ Invoke **pm** with the finalized migration plan. Task:
 >    - [ ] <task-id> complete
 >    ---
 >    ```
-> 3. Run `openspec list --specs` to identify capabilities whose files are touched.
->    For each affected capability, create `openspec/changes/modernize-<slug>/specs/<capability>/spec.md`
+> 3. Run `cd "<WORKTREE>" && openspec list --specs` to identify capabilities whose files are touched.
+>    For each affected capability, create `<WORKTREE>/openspec/changes/modernize-<slug>/specs/<capability>/spec.md`
 >    with a minimal MODIFIED delta:
 >    ```markdown
 >    ## MODIFIED Requirements
@@ -311,7 +343,7 @@ Invoke **pm** with the finalized migration plan. Task:
 >    #### Scenario: <existing scenario name>
 >    [All scenarios unchanged]
 >    ```
-> 4. Run `openspec validate modernize-<slug> --strict` and fix any issues before returning.
+> 4. Run `cd "<WORKTREE>" && openspec validate modernize-<slug> --strict` and fix any issues before returning.
 > Produce an Agent Handoff with the change id, task count, and validate result.
 
 **Phase completion requires `openspec validate modernize-<slug> --strict` to pass.** If it does not pass, surface the validation errors in the Phase Handoff `Open` field.
@@ -350,9 +382,9 @@ Scope:     <scope>
 Branch:    <branch>
 OpenSpec:  modernize-<slug>
 Artifacts:
-  .claude/workflow/<slug>/migration-plan.md
-  openspec/changes/modernize-<slug>/proposal.md
-  openspec/changes/modernize-<slug>/tasks.md
+  <WORKTREE>/.claude/workflow/<slug>/migration-plan.md
+  <WORKTREE>/openspec/changes/modernize-<slug>/proposal.md
+  <WORKTREE>/openspec/changes/modernize-<slug>/tasks.md
 Decisions:
   - <exclusions with rationale>
   - <grouped migrations>
@@ -361,7 +393,7 @@ Decisions:
 For next:  <what Migrate needs: total task count, Batch A dep count,
             Batch B task count, Batch C task count, which tasks are complex
             or low-confidence (need extra Developer iterations), grouped
-            migration task IDs. Task source of truth: openspec/changes/modernize-<slug>/tasks.md>
+            migration task IDs. Task source of truth: <WORKTREE>/openspec/changes/modernize-<slug>/tasks.md>
 Open:      <user decisions on exclusions or scope, or openspec validate errors, or "none">
 === END HANDOFF ===
 ```

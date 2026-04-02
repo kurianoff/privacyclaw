@@ -59,7 +59,7 @@ Open:      <user items, or "none">
 === END HANDOFF ===
 ```
 
-Store the Phase Log at `.claude/workflow/<slug>/phase-log.md`.
+Store the Phase Log at `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`.
 Append each handoff as it arrives.
 
 ---
@@ -127,19 +127,25 @@ final report automatically.
 
 ## Step 1 — Git setup and baseline
 
-Skip if resuming (branch and baseline already exist — verify, don't recreate):
+Skip if resuming (worktree and baseline already exist — verify, don't recreate):
 
 ```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/../worktrees/refactor-${slug}"
 git checkout main && git pull
-git checkout -b refactor/<slug>
-mkdir -p .claude/workflow/<slug>
-cargo test 2>&1 | tee .claude/workflow/<slug>/baseline-tests.txt
+git worktree add "$WORKTREE_PATH" -b refactor/<slug>
+mkdir -p "$WORKTREE_PATH/.claude/workflow/<slug>"
+cd "$WORKTREE_PATH" && cargo test 2>&1 | tee "$WORKTREE_PATH/.claude/workflow/<slug>/baseline-tests.txt"
 ```
 
-If resuming and branch already exists: verify it is clean and ahead of main.
-If `.claude/workflow/<slug>/baseline-tests.txt` is missing, re-run `cargo test`.
+Store `WORKTREE_PATH` — every subsequent Skill() call passes it verbatim as
+`WORKTREE: <path>`. The main repository working tree is not touched again.
 
-Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Refactor-Investigate."
+If resuming and worktree already exists: reconstruct `WORKTREE_PATH` from
+`${REPO_ROOT}/../worktrees/refactor-${slug}` and verify it is clean and
+ahead of main. If `baseline-tests.txt` is missing, re-run `cargo test`.
+
+Tell the user: "Worktree `refactor/<slug>` ready at `$WORKTREE_PATH`. Main repo untouched. Starting Phase 1 — Refactor-Investigate."
 
 ---
 
@@ -148,7 +154,7 @@ Tell the user: "Branch `refactor/<slug>` ready. Starting Phase 1 — Refactor-In
 Skip if `RESUME_FROM` is `Refactor-Plan`, `Refactor-Execute`, or `task-<id>`.
 
 ```text
-Skill("refactor-investigate", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>")
+Skill("refactor-investigate", "<scope>\nBOUNDARIES: <boundaries>\nBRANCH: refactor/<slug>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -165,11 +171,11 @@ handoff before passing to Refactor-Plan.
 ## Step 3 — Invoke Phase 2: Refactor-Plan
 
 Skip if `RESUME_FROM` is `execute` or `task-<id>`. When resuming at
-`Refactor-Plan`, load the Refactor-Investigate handoff from `.claude/workflow/<slug>/smell-catalog.md`
-and the OpenSpec change-id from `openspec/changes/refactor-<slug>/`.
+`Refactor-Plan`, load the Refactor-Investigate handoff from `$WORKTREE_PATH/.claude/workflow/<slug>/smell-catalog.md`
+and the OpenSpec change-id from `$WORKTREE_PATH/openspec/changes/refactor-<slug>/`.
 
 ```text
-Skill("refactor-plan", "<Refactor-Investigate handoff content>\nUSER_EXCLUSIONS: <any user adjustments>")
+Skill("refactor-plan", "<Refactor-Investigate handoff content>\nUSER_EXCLUSIONS: <any user adjustments>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -184,11 +190,11 @@ Wait for direction before continuing.
 ## Step 4 — Invoke Phase 3: Refactor-Execute
 
 When resuming at `refactor-execute` or `task-<id>`, load the Refactor-Plan handoff from
-`openspec/changes/refactor-<slug>/tasks.md` (the OpenSpec tasks file is the source of truth).
+`$WORKTREE_PATH/openspec/changes/refactor-<slug>/tasks.md` (the OpenSpec tasks file is the source of truth).
 Append `RESUME_FROM: task-<id>` to the arguments if resuming mid-execution.
 
 ```text
-Skill("refactor-execute", "<Refactor-Plan handoff content>")
+Skill("refactor-execute", "<Refactor-Plan handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -197,11 +203,51 @@ Wait for Phase Handoff. Append to phase log.
 
 ---
 
-## Step 5 — Final report
+## Step 5 — Final report and GitHub PR
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
-openspec validate refactor-<slug> --strict
+cd "$WORKTREE_PATH" && cargo test 2>&1 | tee "$WORKTREE_PATH/.claude/workflow/<slug>/final-tests.txt"
+cd "$WORKTREE_PATH" && openspec validate refactor-<slug> --strict
+```
+
+Then create the GitHub Pull Request:
+
+```bash
+cd "$WORKTREE_PATH"
+gh pr create \
+  --base main \
+  --head refactor/<slug> \
+  --title "chore: refactor <scope>" \
+  --body "$(cat <<'PREOF'
+## Refactor: <scope>
+
+No behavior change. Structural improvements only.
+
+## Smells Addressed
+<bullet list from smell catalog: location, severity, description>
+
+## Tasks
+- Merged: <N>
+- Reverted: <N> — <list with reason, or "none">
+- Blocked: <N> — <list with reason, or "none">
+
+## Behavior Guarantee
+- Baseline: <X tests passing>
+- Final: <X tests passing>
+
+## Artifacts
+- Smell catalog: `.claude/workflow/<slug>/smell-catalog.md`
+- Refactor log: `.claude/workflow/<slug>/refactor-log.md`
+- OpenSpec change: `openspec/changes/refactor-<slug>/`
+- Phase log: `.claude/workflow/<slug>/phase-log.md`
+
+## Open Items
+<blocked/reverted tasks, or "none">
+
+---
+🤖 Generated with [Claude Code](https://claude.com/claude-code) \`/refactor\`
+PREOF
+)"
 ```
 
 Report to the user:
@@ -211,8 +257,9 @@ Report to the user:
 ✅ Refactor complete — <scope>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Branch: refactor/<slug>
-Phase log: .claude/workflow/<slug>/phase-log.md
+PR: <URL from gh pr create>
+Branch: refactor/<slug>  (worktree: $WORKTREE_PATH)
+Phase log: $WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md
 
 Tasks merged:   <N>
 Tasks reverted: <N> — <list with reason, or "none">
@@ -226,13 +273,11 @@ Behavior guarantee:
   Final:    <X tests passing>
 
 OpenSpec change: refactor-<slug>
-  Tasks:    openspec/changes/refactor-<slug>/tasks.md
   Validate: <clean | issues remaining>
 
-To merge:
-  git checkout main && git merge --no-ff refactor/<slug>
-
-After merge:
+After the PR is merged on GitHub:
+  git worktree remove "$WORKTREE_PATH"
+  git branch -d refactor/<slug>
   openspec archive refactor-<slug> --yes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```

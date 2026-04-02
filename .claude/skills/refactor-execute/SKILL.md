@@ -18,17 +18,39 @@ Extract from the input:
 - `boundaries`: do-not-touch zones (from Refactor-Plan handoff)
 - `branch`: the refactor branch (`refactor/<slug>`)
 - `openspec_id`: the OpenSpec change id (`refactor-<slug>`, from Refactor-Plan handoff `OpenSpec` field)
-- `tasks_path`: `openspec/changes/refactor-<slug>/tasks.md` (from Refactor-Plan handoff `Artifacts`)
+- `tasks_path`: `<WORKTREE>/openspec/changes/refactor-<slug>/tasks.md`
 - `for_next`: context from Refactor-Plan (parallel-safe tasks, risky tasks)
 - `RESUME_FROM`: optional `task-<id>` — skip all tasks before this one
+- `WORKTREE`: the absolute path to the refactor worktree (required;
+  if missing, derive as `$(git rev-parse --show-toplevel)/../worktrees/refactor-<slug>`)
 
-**Inject into every agent's context:** scope, boundaries, branch name.
+Derive `WORKTREE_PARENT` = `dirname(<WORKTREE>)`. Per-task worktrees are
+created as siblings: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`.
+
+**Inject into every agent's context:** scope, boundaries, branch name,
+`WORKTREE: <worktree_path>` (or the specific task worktree path).
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>` or its sibling
+task worktrees, never in the main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes on the refactor branch: `<WORKTREE>/<relative-path>`
+- Git commands on the refactor branch: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<task_worktree_path>" && cargo test`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- Per-task worktrees: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+- **Every agent message must include `WORKTREE: <task_worktree_path>`** (the
+  sibling path, not the feature worktree) so agents commit to the right place.
 
 ---
 
 ## Critical: refactor log
 
-**Maintain `.claude/workflow/<slug>/refactor-log.md`** throughout this phase.
+**Maintain `<WORKTREE>/.claude/workflow/<slug>/refactor-log.md`** throughout this phase.
 After every task, append:
 
 ```text
@@ -87,28 +109,37 @@ Pass forward:
 
 ## Worktree protocol
 
-Each task runs on a dedicated short-lived branch:
+Each task runs on a dedicated short-lived branch that is a **sibling** of the
+refactor worktree (git cannot nest worktrees):
 
 ```bash
-git worktree add ../worktree-refactor-<id> -b task/refactor-<slug>-<id>
+git -C "<WORKTREE>" worktree add \
+  "<WORKTREE_PARENT>/task-refactor-<slug>-<id>" \
+  -b task/refactor-<slug>-<id>
 ```
 
+Where `WORKTREE_PARENT = dirname(WORKTREE)`.
+
 - **Refactoring Engineer, Simplifier, Logging Implementer** commit
-  sequentially. Use `isolation: "worktree"` for code-changing agent calls.
+  sequentially to the task worktree. Use `isolation: "worktree"` for
+  code-changing agent calls. Pass `WORKTREE: <WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+  in their context.
 - **Test Runner and Contrarian** read only — do not commit.
 
 **Merge checkpoint** — after Contrarian approves:
 
 ```bash
-git checkout refactor/<slug>
-git merge --no-ff task/refactor-<slug>-<id> -m "refactor(<id>): <title>"
-git worktree remove ../worktree-refactor-<id>
+git -C "<WORKTREE>" merge --no-ff task/refactor-<slug>-<id> \
+  -m "refactor(<id>): <title>"
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-refactor-<slug>-<id>"
 ```
 
 **Revert checkpoint** — if abandoned after max iterations:
 
 ```bash
-git worktree remove ../worktree-refactor-<id>
+git -C "<WORKTREE>" worktree remove \
+  "<WORKTREE_PARENT>/task-refactor-<slug>-<id>"
 # branch abandoned — no merge
 ```
 
@@ -154,7 +185,7 @@ If reverted or blocked, replace the Test Runner / Contrarian lines with:
 
 ## Task scheduling
 
-Read `openspec/changes/<openspec_id>/tasks.md`. Build a dependency graph
+Read `<WORKTREE>/openspec/changes/<openspec_id>/tasks.md`. Build a dependency graph
 from the `Depends on:` and `Parallel-safe:` fields in each task section:
 
 - **Independent** tasks (`Parallel-safe: yes`, no overlapping files, no
@@ -184,6 +215,11 @@ Pass to Refactoring Engineer: task `id`, `title`, `changes`, `criterion`,
 
 Invoke **refactoring-engineer** on `task/refactor-<slug>-<id>`. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+> (branch: `task/refactor-<slug>-<id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+>
 > Perform task `<id>`: `<title>`.
 > Changes required: `<changes>`.
 > Files: `<files>`.
@@ -196,6 +232,11 @@ Invoke **refactoring-engineer** on `task/refactor-<slug>-<id>`. Task:
 
 Invoke **simplifier** with the RE handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+> (branch: `task/refactor-<slug>-<id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+>
 > Review the changes on `task/refactor-<slug>-<id>`.
 > Remove dead code, premature abstractions, unnecessary complexity
 > introduced by the refactoring itself. Fix only real problems.
@@ -205,6 +246,11 @@ Invoke **simplifier** with the RE handoff. Task:
 
 Invoke **logging-implementer** with the Simplifier handoff. Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+> (branch: `task/refactor-<slug>-<id>`) — do not read or write any
+> files outside this directory.
+> WORKTREE: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+>
 > Retrofit every code path touched on `task/refactor-<slug>-<id>`
 > with structured 5-level tracing per the project logging spec:
 > - WARN: lifecycle events
@@ -218,8 +264,14 @@ Invoke **logging-implementer** with the Simplifier handoff. Task:
 
 Invoke **test-runner**. Task:
 
-> Run `cargo test` against `task/refactor-<slug>-<id>`.
-> Compare against `.claude/workflow/<slug>/baseline-tests.txt`.
+> Working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+> — read files only within this directory. Do not access the main repository.
+> Run `cd "<WORKTREE_PARENT>/task-refactor-<slug>-<id>" && cargo test`.
+> WORKTREE: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+>
+> Run `cargo test` against `task/refactor-<slug>-<id>`
+> (working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`).
+> Compare against `<WORKTREE>/.claude/workflow/<slug>/baseline-tests.txt`.
 > Verdict:
 > - `green` — all previously-passing tests still pass
 > - `red` — regressions (list each: test name, failure, likely cause)
@@ -235,7 +287,7 @@ then repeat Steps 3–5 (Simplifier → LogImpl → Test Runner).
 git worktree remove ../worktree-refactor-<id>
 ```
 
-In `openspec/changes/refactor-<slug>/tasks.md`, update the task's checkbox:
+In `<WORKTREE>/openspec/changes/refactor-<slug>/tasks.md`, update the task's checkbox:
 `- [ ] T<id> complete` → `- [ ] T<id> complete — ✗ REVERTED: <reason>`
 
 Append to refactor log. **Emit task-complete progress report (reverted ✗)
@@ -245,6 +297,10 @@ with running tally.** Move to next task.
 
 Invoke **contrarian** with the full handoff chain (Steps 2–5). Task:
 
+> Working directory: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+> — read files only within this directory. Do not access the main repository.
+> WORKTREE: `<WORKTREE_PARENT>/task-refactor-<slug>-<id>`
+>
 > Review the complete changes on `task/refactor-<slug>-<id>`.
 > Verify:
 > - Verification criterion met: `<criterion>`
@@ -260,7 +316,7 @@ Invoke **contrarian** with the full handoff chain (Steps 2–5). Task:
 >   must re-run Test Runner
 
 **Maximum Contrarian rounds: 3.** If not approved: in
-`openspec/changes/refactor-<slug>/tasks.md` update the task's checkbox:
+`<WORKTREE>/openspec/changes/refactor-<slug>/tasks.md` update the task's checkbox:
 `- [ ] T<id> complete` → `- [ ] T<id> complete — ⚠ BLOCKED: <reason>`
 
 Append to refactor log. **Emit task-complete progress report (blocked ⚠)
@@ -272,7 +328,7 @@ After Contrarian approval:
 
 **Emit task-complete progress report** (merged ✓) with running tally.
 
-1. In `openspec/changes/refactor-<slug>/tasks.md`, mark the task done:
+1. In `<WORKTREE>/openspec/changes/refactor-<slug>/tasks.md`, mark the task done:
    `- [ ] T<id> complete` → `- [x] T<id> complete`
 2. Shut down task team:
    ```text
@@ -294,8 +350,8 @@ After Contrarian approval:
 After all tasks are processed (before team cleanup):
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
-openspec validate <openspec_id> --strict
+cd "<WORKTREE>" && cargo test 2>&1 | tee "<WORKTREE>/.claude/workflow/<slug>/final-tests.txt"
+cd "<WORKTREE>" && openspec validate <openspec_id> --strict
 ```
 
 Compare cargo test output against baseline. If any previously-passing test now
@@ -325,10 +381,10 @@ Scope:     <scope>
 Branch:    <branch>
 OpenSpec:  <openspec_id>
 Artifacts:
-  openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
-  .claude/workflow/<slug>/refactor-log.md
-  .claude/workflow/<slug>/baseline-tests.txt
-  .claude/workflow/<slug>/final-tests.txt
+  <worktree_path>/openspec/changes/<openspec_id>/tasks.md  (updated with completion status)
+  <worktree_path>/.claude/workflow/<slug>/refactor-log.md
+  <worktree_path>/.claude/workflow/<slug>/baseline-tests.txt
+  <worktree_path>/.claude/workflow/<slug>/final-tests.txt
 Decisions: <key implementation decisions per task>
 For next:  <what follow-on work needs: what changed structurally, what was
             reverted or blocked, areas that may need further attention.

@@ -18,6 +18,24 @@ Extract from the input:
 - `scope`: the code area to modernize (or "entire codebase" if omitted)
 - `BRANCH`: the modernize branch (if provided; otherwise record as `tbd`)
 - `user_exclusions`: any deps the user pre-excluded (from orchestrator context)
+- `WORKTREE`: the absolute path to the modernize worktree (required when
+  invoked from orchestrator; if missing, derive as
+  `$(git rev-parse --show-toplevel)/../worktrees/modernize-<slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: `<WORKTREE>/<relative-path>`
+- Git commands: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  read and write the correct copy of the code.
 
 ---
 
@@ -67,29 +85,29 @@ Invoke **general-purpose** (with web search and CLI access). Task:
 > Install any missing tools, then run all of the following and record output:
 >
 > ```bash
-> # Toolchain currency
+> # Toolchain currency (no project directory needed)
 > rustup show
 > rustup check
 > rustc --version
 > cargo --version
 >
-> # Dependency currency
+> # Dependency currency — must run inside the worktree
 > cargo install cargo-outdated 2>/dev/null || true
-> cargo outdated --depth 1 2>&1   # direct deps vs latest on crates.io
+> cd "<WORKTREE>" && cargo outdated --depth 1 2>&1   # direct deps vs latest on crates.io
 >
-> # Security
+> # Security — must run inside the worktree
 > cargo install cargo-audit 2>/dev/null || true
-> cargo audit 2>&1
+> cd "<WORKTREE>" && cargo audit 2>&1
 >
-> # Unused dependencies
+> # Unused dependencies — must run inside the worktree
 > cargo install cargo-machete 2>/dev/null || true
-> cargo machete 2>&1
+> cd "<WORKTREE>" && cargo machete 2>&1
 >
-> # Full dependency tree (direct vs transitive)
-> cargo tree --depth 1 2>&1
+> # Full dependency tree — must run inside the worktree
+> cd "<WORKTREE>" && cargo tree --depth 1 2>&1
 > ```
 >
-> Also read `Cargo.toml` and record:
+> Also read `<WORKTREE>/Cargo.toml` and record:
 > - The current `edition` field
 > - Any `[patch]` sections (these are intentional overrides — do not classify
 >   overridden crates as candidates for standard version bumps)
@@ -135,17 +153,21 @@ Invoke **general-purpose** again with the cargo outdated output. Task:
 Invoke **investigator** with the Step 2 handoff and the `cargo machete` output.
 Task:
 
+> **All file searches must be performed within `<WORKTREE>`. Never read or
+> search files outside the worktree.**
+>
 > For every dependency flagged as having breaking changes (major version gap):
-> - Find every file in `<scope>` that directly imports or uses this dependency
+> - Find every file in `<WORKTREE>` (limiting to `<scope>` if a subdirectory)
+>   that directly imports or uses this dependency
 > - Identify the specific APIs in use: function calls, type names, trait impls,
->   feature flags in Cargo.toml
-> - Look for `#[allow(deprecated)]` suppressions anywhere in scope — list each
+>   feature flags in `<WORKTREE>/Cargo.toml`
+> - Look for `#[allow(deprecated)]` suppressions anywhere in `<WORKTREE>` — list each
 >   with the dep it relates to (if determinable) and its file:line
 > - Look for `// TODO: update`, `// FIXME: upgrade`, or similar comments
 >   related to dependencies — these are signals of known tech debt
 >
 > For every dep flagged by `cargo machete` as unused:
-> - Verify the finding: search for any use of the dep's crate name in `<scope>`
+> - Verify the finding: search for any use of the dep's crate name in `<WORKTREE>`
 > - Confirm whether it is truly unused or used only in tests/build scripts
 >
 > Do NOT propose fixes. Produce an Agent Handoff mapping each dep to:
@@ -186,7 +208,7 @@ Invoke **contrarian** with all three prior handoffs. Task:
 ### Step 5 — Build and save catalog
 
 Using all four handoffs, build the tiered update catalog.
-Save it to `.claude/workflow/<slug>/audit-catalog.md`:
+Save it to `<WORKTREE>/.claude/workflow/<slug>/audit-catalog.md`:
 
 ```markdown
 # Modernization Audit Catalog
@@ -244,9 +266,9 @@ When surfacing security advisories in the Phase Handoff `Open` field:
 
 ### Step 6 — Scaffold OpenSpec change
 
-Run `openspec list` to confirm no existing change conflicts with `modernize-<slug>`.
+Run `cd "<WORKTREE>" && openspec list` to confirm no existing change conflicts with `modernize-<slug>`.
 
-Create `openspec/changes/modernize-<slug>/proposal.md`:
+Create `<WORKTREE>/openspec/changes/modernize-<slug>/proposal.md`:
 
 ```markdown
 # Modernize: <scope>
@@ -286,7 +308,7 @@ Phase 1 is complete when:
 - All direct dependencies are classified
 - Contrarian has reviewed and finalized tier assignments
 - Security advisories are identified (or confirmed absent)
-- `openspec/changes/modernize-<slug>/proposal.md` is scaffolded
+- `<WORKTREE>/openspec/changes/modernize-<slug>/proposal.md` is scaffolded
 
 Produce a **Phase Handoff**:
 
@@ -298,8 +320,8 @@ Scope:     <scope>
 Branch:    <branch or tbd>
 OpenSpec:  modernize-<slug>
 Artifacts:
-  .claude/workflow/<slug>/audit-catalog.md
-  openspec/changes/modernize-<slug>/proposal.md
+  <WORKTREE>/.claude/workflow/<slug>/audit-catalog.md
+  <WORKTREE>/openspec/changes/modernize-<slug>/proposal.md
 Decisions:
   - <Contrarian reclassifications with rationale>
   - <Confirmed unused deps>

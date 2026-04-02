@@ -15,6 +15,23 @@ Input: **$ARGUMENTS**
 Extract from the input:
 - `feature`: the feature description
 - `BRANCH`: the feature branch name (if provided; otherwise record as `tbd`)
+- `WORKTREE`: the absolute path to the isolated workflow worktree (if provided;
+  otherwise derive as `$(git rev-parse --show-toplevel)/../worktrees/<branch-slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File writes: use the absolute path `<WORKTREE>/<relative-path>`
+- Git commands: `git -C "<WORKTREE>" <command>`
+- Cargo commands: `cd "<WORKTREE>" && cargo <command>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  apply the same rule without ambiguity.
 
 ---
 
@@ -69,7 +86,10 @@ Invoke **architect** with the feature description. Task:
 > data model changes; integration points with existing code; open questions
 > that need resolution before implementation.
 >
-> Save the document to `.claude/workflow/<slug>/design.md`.
+> WORKTREE: `<worktree_path>`
+> Save the document to `<worktree_path>/.claude/workflow/<slug>/design.md`.
+> All file reads and writes use `<worktree_path>/` as the base — do not
+> read or write the main repository working tree.
 > Produce an Agent Handoff.
 
 ### Step 2 — Investigator: codebase fit analysis
@@ -77,6 +97,10 @@ Invoke **architect** with the feature description. Task:
 Invoke **investigator** with the Architect's handoff and the design doc path.
 Task:
 
+> Working directory: `<WORKTREE>` — search and read files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read the Design Document at `<path>`. Trace every integration point named
 > in it through the existing codebase. Identify: code paths that must change,
 > conflicts with current architecture, risks the design does not address,
@@ -88,6 +112,10 @@ Task:
 
 Pass the Investigator handoff back to **architect**. Task:
 
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read the Investigator's findings. Update the Design Document to address
 > every finding. Where a finding reveals a genuine design flaw, revise the
 > design. Where a finding is a non-issue, document why.
@@ -98,6 +126,10 @@ Pass the Investigator handoff back to **architect**. Task:
 Invoke **contrarian** with the updated design doc and the Architect + Investigator
 handoffs. Task:
 
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read the Design Document and the prior agent handoffs. Your job is to find
 > what is wrong, under-specified, or risky. Challenge every assumption.
 > Identify unaddressed failure modes. Flag design decisions that appear
@@ -110,6 +142,10 @@ handoffs. Task:
 
 Pass the Contrarian handoff to **architect**. Task:
 
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > For each challenge in the Contrarian's handoff: either revise the Design
 > Document to address it, or explicitly dismiss it with a clear rationale.
 > Produce an Agent Handoff documenting each response.
@@ -154,7 +190,7 @@ If `TeamCreate` was never called (sequential fallback path), skip this section.
 ## Phase completion
 
 Phase 1 is complete when:
-- Design Document exists at `.claude/workflow/<slug>/design.md`
+- Design Document exists at `<WORKTREE>/.claude/workflow/<slug>/design.md`
 - Contrarian's last handoff has no open critical or major items
 - All user questions have been answered (or none were raised)
 
@@ -166,7 +202,7 @@ Phase:     Design
 Status:    complete  (or: blocked — <reason>)
 Feature:   <feature description>
 Branch:    <branch or tbd>
-Artifacts: .claude/workflow/<slug>/design.md
+Artifacts: <worktree_path>/.claude/workflow/<slug>/design.md
 Decisions: <bullet list of key design decisions>
 For next:  <what Planning needs to know: key constraints, open questions
             resolved, anything that will shape the task list>

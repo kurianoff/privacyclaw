@@ -20,6 +20,21 @@ Extract from the input:
 - `smell_catalog`: path to the smell catalog artifact
 - `for_next`: context from Refactor-Investigate (smell counts, interdependencies, risks)
 - `user_exclusions`: any additional smells the user excluded at the Refactor-Investigate gate
+- `WORKTREE`: the absolute path to the refactor worktree (required;
+  if missing, derive as `$(git rev-parse --show-toplevel)/../worktrees/refactor-<slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: `<WORKTREE>/<relative-path>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  apply the same rule without ambiguity.
 
 ---
 
@@ -65,6 +80,10 @@ Pass forward:
 
 Invoke **architect** with the smell catalog and boundaries. Task:
 
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read the smell catalog at `<smell_catalog>`.
 > Apply user exclusions: `<user_exclusions>`.
 > Produce an ordered, dependency-aware task list. Each task must:
@@ -89,6 +108,10 @@ Invoke **architect** with the smell catalog and boundaries. Task:
 
 Invoke **contrarian** with the Architect handoff and smell catalog. Task:
 
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Review the task list. Challenge:
 > - Tasks that risk behavior change (too aggressive a restructuring)
 > - Tasks too large to verify atomically (split them)
@@ -115,9 +138,13 @@ Handoff — the orchestrator will ask the user for direction.
 
 Invoke **pm** with the finalized task list from the Architect/Contrarian cycle. Task:
 
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Using the validated task list, complete the OpenSpec change `refactor-<slug>`:
-> 1. Update `openspec/changes/refactor-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
-> 2. Create `openspec/changes/refactor-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
+> 1. Update `<WORKTREE>/openspec/changes/refactor-<slug>/proposal.md` — fill in "What Changes" with task titles and "Impact" with all affected files.
+> 2. Create `<WORKTREE>/openspec/changes/refactor-<slug>/tasks.md` — one section per task in OpenSpec checkbox format:
 >    ```markdown
 >    # Tasks: Refactor <scope>
 >    Run `cargo test && cargo clippy -- -D warnings` after every merged task.
@@ -132,8 +159,8 @@ Invoke **pm** with the finalized task list from the Architect/Contrarian cycle. 
 >    - [ ] T<id> complete
 >    ---
 >    ```
-> 3. Run `openspec list --specs` to identify capabilities whose files are touched.
->    For each affected capability, create `openspec/changes/refactor-<slug>/specs/<capability>/spec.md`
+> 3. Run `cd "<WORKTREE>" && openspec list --specs` to identify capabilities whose files are touched.
+>    For each affected capability, create `<WORKTREE>/openspec/changes/refactor-<slug>/specs/<capability>/spec.md`
 >    with a minimal MODIFIED delta:
 >    ```markdown
 >    ## MODIFIED Requirements
@@ -143,7 +170,7 @@ Invoke **pm** with the finalized task list from the Architect/Contrarian cycle. 
 >    #### Scenario: <existing scenario name>
 >    [All scenarios unchanged]
 >    ```
-> 4. Run `openspec validate refactor-<slug> --strict` and fix any issues before returning.
+> 4. Run `cd "<WORKTREE>" && openspec validate refactor-<slug> --strict` and fix any issues before returning.
 > Produce an Agent Handoff with the change id, task count, and validate result.
 
 **Phase completion requires `openspec validate refactor-<slug> --strict` to pass.** If it does not pass, surface the validation errors in the Phase Handoff `Open` field.
@@ -178,8 +205,8 @@ Scope:     <scope>
 Branch:    <branch>
 OpenSpec:  refactor-<slug>
 Artifacts:
-  openspec/changes/refactor-<slug>/proposal.md
-  openspec/changes/refactor-<slug>/tasks.md
+  <worktree_path>/openspec/changes/refactor-<slug>/proposal.md
+  <worktree_path>/openspec/changes/refactor-<slug>/tasks.md
 Decisions:
   - <key task grouping and sequencing decisions>
   - <Contrarian challenges resolved or dismissed>

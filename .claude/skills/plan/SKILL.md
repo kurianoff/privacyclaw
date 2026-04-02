@@ -19,6 +19,21 @@ Extract from the input:
 - `design_doc`: path to the Design Document (from the Design handoff `Artifacts`)
 - `decisions`: key design decisions from the Design handoff
 - `for_next`: context the Planning phase needs from Design
+- `WORKTREE`: the absolute path to the isolated workflow worktree (required;
+  if missing, derive as `$(git rev-parse --show-toplevel)/../worktrees/<branch-slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File reads/writes: use the absolute path `<WORKTREE>/<relative-path>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  apply the same rule without ambiguity.
 
 ---
 
@@ -83,11 +98,15 @@ on the implementation approach before any task list is drafted. Task:
 
 Invoke **pm** with the joint kickoff handoff and Design Document. Task:
 
-> Using the agreed approach from the planning kickoff, run `openspec proposal`
-> to scaffold a new change. Create:
-> - `openspec/changes/<id>/proposal.md`
-> - `openspec/changes/<id>/design.md` (if the design warrants it)
-> - `openspec/changes/<id>/tasks.md` — first draft task list
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
+> Using the agreed approach from the planning kickoff, run
+> `cd "<WORKTREE>" && openspec proposal` to scaffold a new change. Create:
+> - `<WORKTREE>/openspec/changes/<id>/proposal.md`
+> - `<WORKTREE>/openspec/changes/<id>/design.md` (if the design warrants it)
+> - `<WORKTREE>/openspec/changes/<id>/tasks.md` — first draft task list
 >
 > Tasks must be small, ordered, and independently verifiable.
 > Each task must include: what to implement, how to verify it is done.
@@ -97,7 +116,11 @@ Invoke **pm** with the joint kickoff handoff and Design Document. Task:
 
 Invoke **architect** with the PM handoff and task list path. Task:
 
-> Review `openspec/changes/<id>/tasks.md`. Flag:
+> Working directory: `<WORKTREE>` — read and write files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
+> Review `<WORKTREE>/openspec/changes/<id>/tasks.md`. Flag:
 > - Missing tasks (things the Design requires that have no task)
 > - Wrong sequencing (dependencies not respected)
 > - Under-specified tasks (not enough detail to implement without guessing)
@@ -123,7 +146,11 @@ are available) against the current task list. Each produces an Agent Handoff.
 
 **Investigator** task:
 
-> Read `openspec/changes/<id>/tasks.md`. Identify tasks that:
+> Working directory: `<WORKTREE>` — search and read files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
+> Read `<WORKTREE>/openspec/changes/<id>/tasks.md`. Identify tasks that:
 > - Touch code paths with hidden complexity not reflected in the task scope
 > - Have implicit dependencies on other tasks not marked
 > - Make assumptions about current behaviour that may be wrong
@@ -131,7 +158,12 @@ are available) against the current task list. Each produces an Agent Handoff.
 
 **Contrarian** task:
 
-> Read `openspec/changes/<id>/tasks.md` and the Design Document. Challenge:
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
+> Read `<WORKTREE>/openspec/changes/<id>/tasks.md` and the Design Document.
+> Challenge:
 > - Tasks that are too optimistic about implementation effort
 > - Missing tasks for error handling, edge cases, or rollback
 > - The overall sequencing — is there a better order?
@@ -161,7 +193,7 @@ If scope, priority, or edge-case decisions arise that require user input:
 Run:
 
 ```bash
-openspec validate <id> --strict
+cd "<WORKTREE>" && openspec validate <id> --strict
 ```
 
 Resolve every issue reported before proceeding. If validation cannot be made
@@ -202,9 +234,9 @@ Status:    complete  (or: blocked — <reason>)
 Feature:   <feature description>
 Branch:    <branch>
 Artifacts:
-  openspec/changes/<id>/proposal.md
-  openspec/changes/<id>/tasks.md
-  openspec/changes/<id>/design.md  (if created)
+  <WORKTREE>/openspec/changes/<id>/proposal.md
+  <WORKTREE>/openspec/changes/<id>/tasks.md
+  <WORKTREE>/openspec/changes/<id>/design.md  (if created)
 Decisions: <bullet list of key planning decisions>
 For next:  <what Development needs: OpenSpec change id, task count,
             any constraints or known risks Development must plan around>

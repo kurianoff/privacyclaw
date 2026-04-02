@@ -51,7 +51,7 @@ Open:      <bullet list of items needing user input, or "none">
 === END HANDOFF ===
 ```
 
-Store the full Phase Log in `.claude/workflow/modernize-<slug>/phase-log.md`.
+Store the full Phase Log in `$WORKTREE_PATH/.claude/workflow/modernize-<slug>/phase-log.md`.
 Append each handoff as it arrives.
 
 ---
@@ -147,19 +147,25 @@ description lowercased with spaces replaced by hyphens, truncated to 20 chars
 Example: scope "entire codebase", date 2026-03-16 → slug `2026-03-16-all`
 
 ```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/../worktrees/modernize-${slug}"
 git checkout main && git pull
-git checkout -b modernize/<slug>
-mkdir -p .claude/workflow/modernize-<slug>
+git worktree add "$WORKTREE_PATH" -b modernize/<slug>
+mkdir -p "$WORKTREE_PATH/.claude/workflow/modernize-<slug>"
 ```
 
-Tell the user: "Branch `modernize/<slug>` created. Starting Phase 1 — Audit."
+Store `WORKTREE_PATH` — every subsequent Skill() call passes it verbatim as
+`WORKTREE: <path>`. The main repository working tree is not touched again after
+this step.
+
+Tell the user: "Worktree `modernize/<slug>` created at `$WORKTREE_PATH`. Main repo is untouched. Starting Phase 1 — Audit."
 
 ---
 
 ## Step 2 — Invoke Phase 1: Audit
 
 ```text
-Skill("audit", "<scope>\nBRANCH: modernize/<slug>")
+Skill("audit", "<scope>\nBRANCH: modernize/<slug>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -182,7 +188,7 @@ Audit handoff content before passing to Research.
 Tell the user: "Starting Phase 2 — Research."
 
 ```text
-Skill("research", "<audit handoff content>\nUSER_EXCLUSIONS: <any user-added exclusions>")
+Skill("research", "<audit handoff content>\nUSER_EXCLUSIONS: <any user-added exclusions>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -218,7 +224,7 @@ Tell the user: "Starting Phase 3 — Migration. This phase updates dependencies
 and adapts code to new APIs — it may take a while."
 
 ```text
-Skill("migrate", "<research handoff content>")
+Skill("migrate", "<research handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -240,7 +246,7 @@ Only if the user confirms:
 Tell the user: "Starting Phase 4 — Edition Upgrade."
 
 ```text
-Skill("upgrade", "<migrate handoff content>")
+Skill("upgrade", "<migrate handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -253,16 +259,64 @@ modernize branch as-is (without the edition upgrade) or to defer.
 
 ---
 
-## Step 6 — Final report
+## Step 6 — Final report and GitHub PR
 
 After all phases complete (or after Phase 3 if upgrade was skipped/declined):
 
 ```bash
+cd "$WORKTREE_PATH"
 cargo audit
 cargo outdated --depth 1
 cargo clippy -- -D warnings
 cargo test
 openspec validate modernize-<slug> --strict
+```
+
+Then create the GitHub Pull Request:
+
+```bash
+cd "$WORKTREE_PATH"
+gh pr create \
+  --base main \
+  --head modernize/<slug> \
+  --title "chore: modernize <scope>" \
+  --body "$(cat <<'PREOF'
+## Modernization: <scope>
+
+## Summary
+<2–3 sentences describing what was modernized, drawn from the Audit phase catalog>
+
+## Workflow
+Implemented via \`/modernize\` (Audit → Research → Migrate → Upgrade).
+
+## Key Decisions
+<bullet list extracted from the Decisions fields across all Phase Handoffs>
+
+## Results
+- Deps updated:  <count>
+- Deps reverted: <count> — <names, or "none">
+- Deps blocked:  <count> — <names and reasons, or "none">
+- Edition upgrade: <completed to <target> | skipped | blocked>
+
+## Final Checks
+- cargo audit:    <clean | advisories remaining>
+- cargo outdated: <clean | pinned/excluded deps remaining>
+- cargo clippy:   <clean | warnings>
+- cargo test:     <pass count>
+
+## Artifacts
+- Phase log: \`.claude/workflow/modernize-<slug>/phase-log.md\`
+- Audit catalog: \`.claude/workflow/modernize-<slug>/audit-catalog.md\`
+- Migration log: \`.claude/workflow/modernize-<slug>/migration-log.md\`
+- OpenSpec change: \`openspec/changes/modernize-<slug>/\`
+
+## Open Items
+<residual open items from any Phase Handoff, or "none">
+
+---
+🤖 Generated with [Claude Code](https://claude.com/claude-code) \`/modernize\`
+PREOF
+)"
 ```
 
 Report to the user:
@@ -272,8 +326,9 @@ Report to the user:
 ✅ Modernization complete
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Branch: modernize/<slug>
-Phase log: .claude/workflow/modernize-<slug>/phase-log.md
+PR: <URL from gh pr create>
+Branch: modernize/<slug>  (worktree: $WORKTREE_PATH)
+Phase log: $WORKTREE_PATH/.claude/workflow/modernize-<slug>/phase-log.md
 
 Deps updated:  <count>
 Deps reverted: <count> — <names, or "none">
@@ -290,10 +345,9 @@ OpenSpec change: modernize-<slug>
   Tasks:    openspec/changes/modernize-<slug>/tasks.md
   Validate: <clean | issues remaining>
 
-To merge:
-  git checkout main && git merge --no-ff modernize/<slug>
-
-After merge:
+After the PR is merged on GitHub:
+  git worktree remove "$WORKTREE_PATH"
+  git branch -d modernize/<slug>
   openspec archive modernize-<slug> --yes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```

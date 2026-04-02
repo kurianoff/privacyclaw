@@ -62,7 +62,7 @@ Open:      <bullet list of items needing user input, or "none">
 === END HANDOFF ===
 ```
 
-Store the full Phase Log in a file at `.claude/workflow/<slug>/phase-log.md`
+Store the full Phase Log in a file at `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`
 so it survives context compaction. Append each handoff as it arrives.
 
 ---
@@ -126,22 +126,29 @@ work is already done by that point).
 Derive a slug from the feature description (lowercase, hyphens, max 40 chars).
 
 ```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/../worktrees/feature-${slug}"
 git checkout main && git pull
-git checkout -b feature/<slug>
-mkdir -p .claude/workflow/<slug>
+git worktree add "$WORKTREE_PATH" -b feature/<slug>
+mkdir -p "$WORKTREE_PATH/.claude/workflow/<slug>"
 ```
 
-Tell the user: "Branch `feature/<slug>` created. Starting Phase 1 — Design."
+Store `WORKTREE_PATH` — every subsequent Skill() call passes it verbatim as
+`WORKTREE: <path>`. The main repository working tree is not touched again after
+this step.
+
+Tell the user: "Worktree `feature/<slug>` created at `$WORKTREE_PATH`. Main repo
+is untouched. Starting Phase 1 — Design."
 
 ---
 
 ## Step 2 — Invoke Phase 1: Design
 
 ```text
-Skill("design", "<feature description>\nBRANCH: feature/<slug>")
+Skill("design", "<feature description>\nBRANCH: feature/<slug>\nWORKTREE: <worktree_path>")
 ```
 
-Wait for the Phase Handoff. Append it to `.claude/workflow/<slug>/phase-log.md`.
+Wait for the Phase Handoff. Append it to `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`.
 
 **Post the Phase 1 progress report** (see User progress report format above).
 
@@ -159,7 +166,7 @@ Tell the user: "Starting Phase 2 — Planning."
 Pass the Design handoff as context:
 
 ```text
-Skill("plan", "<design handoff content>")
+Skill("plan", "<design handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -180,7 +187,7 @@ tasks — it may take a while."
 Pass the Planning handoff as context:
 
 ```text
-Skill("develop", "<plan handoff content>")
+Skill("develop", "<plan handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -199,7 +206,7 @@ Tell the user: "Starting Phase 4 — Testing."
 Pass the Development handoff as context:
 
 ```text
-Skill("test", "<develop handoff content>")
+Skill("test", "<develop handoff content>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for the Phase Handoff. Append to phase log.
@@ -208,19 +215,60 @@ Wait for the Phase Handoff. Append to phase log.
 
 ---
 
-## Step 6 — Final merge
+## Step 6 — Create GitHub PR
 
-After Phase 4 returns a complete handoff with no open items:
+After Phase 4 returns a complete handoff with no open items, create a GitHub
+Pull Request. Do **not** merge locally — the PR is the delivery artifact.
+
+Read the phase log at `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`
+to populate the decisions and artifacts lists. Read the Testing handoff for
+the test summary.
 
 ```bash
-git checkout main
-git merge --no-ff feature/<slug>
+cd "$WORKTREE_PATH"
+gh pr create \
+  --base main \
+  --head feature/<slug> \
+  --title "<feature description>" \
+  --body "$(cat <<'PREOF'
+## Summary
+<2–3 sentences describing what was built, drawn from the Design phase description>
+
+## Workflow
+Implemented via `/implement` (Design → Planning → Development → Testing).
+
+## Key Decisions
+<bullet list extracted from the Decisions fields across all four Phase Handoffs>
+
+## Artifacts
+- Design document: `.claude/workflow/<slug>/design.md`
+- Implementation log: `.claude/workflow/<slug>/impl-log.md`
+- OpenSpec change: `openspec/changes/<openspec_id>/`
+- Phase log: `.claude/workflow/<slug>/phase-log.md`
+
+## Test Results
+<pass/fail summary from the Testing phase handoff "For next:" field>
+
+## Open Items
+<residual open items from any Phase Handoff, or "none">
+
+---
+🤖 Generated with [Claude Code](https://claude.com/claude-code) \`/implement\`
+PREOF
+)"
 ```
 
 Report to the user:
-- Feature branch `feature/<slug>` merged to `main`
-- Path to phase log: `.claude/workflow/<slug>/phase-log.md`
+- PR URL (printed by `gh pr create`)
+- Branch: `feature/<slug>` in worktree at `$WORKTREE_PATH`
+- Phase log: `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`
 - Any residual open items from the Phase Log
+
+**After the PR is merged on GitHub**, clean up the worktree:
+```bash
+git worktree remove "$WORKTREE_PATH"
+git branch -d feature/<slug>
+```
 
 ---
 

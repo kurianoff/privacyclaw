@@ -16,6 +16,22 @@ Extract from the input:
 - `scope`: the code area to refactor
 - `boundaries`: do-not-touch zones. Record as `none` if omitted.
 - `BRANCH`: the refactor branch (if provided; otherwise record as `tbd`)
+- `WORKTREE`: the absolute path to the refactor worktree (if provided; otherwise
+  derive as `$(git rev-parse --show-toplevel)/../worktrees/refactor-<slug>`)
+
+---
+
+## Working directory
+
+**All operations in this phase must happen inside `<WORKTREE>`, never in the
+main repository working tree.**
+
+Rules that apply to this coordinator and to every agent it invokes:
+- File writes: `<WORKTREE>/<relative-path>`
+- openspec commands: `cd "<WORKTREE>" && openspec <command>`
+- Codebase reads: agents read source files from `<WORKTREE>/`
+- **Every agent message must include `WORKTREE: <worktree_path>`** so agents
+  read the correct copy of the code.
 
 ---
 
@@ -61,6 +77,10 @@ Pass forward:
 
 Invoke **investigator** with scope and boundaries. Task:
 
+> Working directory: `<WORKTREE>` — search and read files only within this
+> directory. Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Read every file in scope: `<scope>`.
 > Catalog every structural problem you find:
 > - Over-long functions (> ~50 lines of logic)
@@ -84,6 +104,10 @@ Invoke **investigator** with scope and boundaries. Task:
 
 Invoke **contrarian** with the Investigator handoff. Task:
 
+> Working directory: `<WORKTREE>` — read files only within this directory.
+> Do not access the main repository working tree.
+> WORKTREE: `<worktree_path>`
+>
 > Review the smell catalog. Challenge:
 > - High-severity smells where the refactoring risk outweighs the benefit
 > - Smells the Investigator missed
@@ -98,7 +122,7 @@ Invoke **contrarian** with the Investigator handoff. Task:
 
 ### Step 3 — Save catalog
 
-Save the validated catalog to `.claude/workflow/<slug>/smell-catalog.md`:
+Save the validated catalog to `<WORKTREE>/.claude/workflow/<slug>/smell-catalog.md`:
 
 ```markdown
 # Smell Catalog
@@ -131,9 +155,9 @@ Branch: <branch>
 
 ### Step 4 — Scaffold OpenSpec change
 
-Run `openspec list` to confirm no existing change conflicts with `refactor-<slug>`.
+Run `cd "<WORKTREE>" && openspec list` to confirm no existing change conflicts with `refactor-<slug>`.
 
-Create `openspec/changes/refactor-<slug>/proposal.md`:
+Create `<WORKTREE>/openspec/changes/refactor-<slug>/proposal.md`:
 
 ```markdown
 # Refactor: <scope>
@@ -177,8 +201,8 @@ Scope:     <scope>
 Branch:    <branch or tbd>
 OpenSpec:  refactor-<slug>
 Artifacts:
-  .claude/workflow/<slug>/smell-catalog.md
-  openspec/changes/refactor-<slug>/proposal.md
+  <worktree_path>/.claude/workflow/<slug>/smell-catalog.md
+  <worktree_path>/openspec/changes/refactor-<slug>/proposal.md
 Decisions:
   - <Contrarian reclassifications and exclusions with rationale>
 For next:  <what Refactor-Plan needs: smell count per severity, notable

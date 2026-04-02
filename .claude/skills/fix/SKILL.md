@@ -58,7 +58,7 @@ Open:      <bullet list of items needing user input, or "none">
 === END HANDOFF ===
 ```
 
-Store the Phase Log at `.claude/workflow/<slug>/phase-log.md`. Append each
+Store the Phase Log at `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`. Append each
 handoff as it arrives.
 
 ---
@@ -152,17 +152,22 @@ final report automatically.
 If not resuming:
 
 ```bash
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/../worktrees/fix-${slug}"
 git checkout main && git pull
-git checkout -b fix/<slug>
-mkdir -p .claude/workflow/<slug>
+git worktree add "$WORKTREE_PATH" -b fix/<slug>
+mkdir -p "$WORKTREE_PATH/.claude/workflow/<slug>"
 ```
+
+Store `WORKTREE_PATH` — every subsequent Skill() call passes it verbatim as
+`WORKTREE: <path>`. The main repository working tree is not touched again.
 
 **Skip baseline tests if `RESUME_FROM: Fix-Investigate` or later.**
 
 If not resuming past baseline:
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/baseline-tests.txt
+cd "$WORKTREE_PATH" && cargo test 2>&1 | tee "$WORKTREE_PATH/.claude/workflow/<slug>/baseline-tests.txt"
 ```
 
 If the baseline is broken (pre-existing test failures), record them. Do not
@@ -170,21 +175,23 @@ block — fixes may be made on a broken baseline — but note the pre-existing
 failures clearly so Phase 3 (Development) and Phase 4 (Testing) can
 distinguish them from regressions introduced by the fix.
 
-If resuming with an existing branch, verify it exists:
+If resuming with an existing worktree, verify it and reconstruct `WORKTREE_PATH`:
 
 ```bash
-git branch --list fix/<slug>
-git checkout fix/<slug>
+REPO_ROOT=$(git rev-parse --show-toplevel)
+WORKTREE_PATH="${REPO_ROOT}/../worktrees/fix-${slug}"
+# If worktree is missing but branch exists, recreate it:
+git worktree list | grep "fix/<slug>" || git worktree add "$WORKTREE_PATH" fix/<slug>
 ```
 
-Tell the user: "Branch `fix/<slug>` ready. Starting Phase 1 — Fix-Investigate."
+Tell the user: "Worktree `fix/<slug>` ready at `$WORKTREE_PATH`. Main repo untouched. Starting Phase 1 — Fix-Investigate."
 
 ---
 
 ## Step 2 — Invoke Phase 1: Fix-Investigate
 
 ```text
-Skill("fix-investigate", "<symptom>\nBOUNDARIES: <boundaries>\nBRANCH: fix/<slug>")
+Skill("fix-investigate", "<symptom>\nBOUNDARIES: <boundaries>\nBRANCH: fix/<slug>\nWORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -207,11 +214,12 @@ Pass the Fix-Investigate handoff as input, with explicit framing:
 
 ```text
 Skill("plan", "<fix-investigate handoff content>
-FRAMING: This is a bug fix, not a feature. The RCA at .claude/workflow/<slug>/rca.md
+FRAMING: This is a bug fix, not a feature. The RCA at <worktree_path>/.claude/workflow/<slug>/rca.md
 is the design document. Planning must scope tasks to the minimal fix surface
 identified in the RCA — do not expand scope beyond what the root cause requires.
 Prefer a single task unless the fix surface genuinely requires sequenced changes.
-USER_AMENDMENTS: <any user corrections from the Phase 1 gate>")
+USER_AMENDMENTS: <any user corrections from the Phase 1 gate>
+WORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -233,7 +241,8 @@ Pass the Planning handoff as input, with framing:
 Skill("develop", "<planning handoff content>
 FRAMING: This is a bug fix. The fix must be minimal — implement exactly what
 the RCA identified, nothing more. Do not refactor surrounding code unless it
-directly interferes with the fix. Branch is fix/<slug>.")
+directly interferes with the fix. Branch is fix/<slug>.
+WORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -257,7 +266,8 @@ FRAMING: This is a bug fix. Testing must include:
    test the exact scenario described in the symptom.
 2. Verification that the fix does not break adjacent behavior.
 Stress tests are NOT needed unless the root cause was a concurrency issue.
-Branch is fix/<slug>.")
+Branch is fix/<slug>.
+WORKTREE: <worktree_path>")
 ```
 
 Wait for Phase Handoff. Append to phase log.
@@ -266,21 +276,60 @@ Wait for Phase Handoff. Append to phase log.
 
 ---
 
-## Step 6 — Final report
+## Step 6 — Final report and GitHub PR
 
 ```bash
-cargo test 2>&1 | tee .claude/workflow/<slug>/final-tests.txt
+cd "$WORKTREE_PATH" && cargo test 2>&1 | tee "$WORKTREE_PATH/.claude/workflow/<slug>/final-tests.txt"
 ```
 
-Compare against baseline. Report to the user:
+Compare against baseline. Then create the GitHub Pull Request:
+
+```bash
+cd "$WORKTREE_PATH"
+gh pr create \
+  --base main \
+  --head fix/<slug> \
+  --title "fix: <symptom description>" \
+  --body "$(cat <<'PREOF'
+## Bug Fix: <symptom description>
+
+## Root Cause
+**Location**: `<file:line>`
+**Mechanism**: <one-line causal chain from RCA>
+**Confidence**: <high | medium | low>
+
+## Fix Surface
+<N files changed — list each>
+
+## Behavior Guarantee
+- Baseline: <X tests passing, Y pre-existing failures>
+- Final: <X tests passing>
+- Regression test: added ✓
+
+## Artifacts
+- RCA: `.claude/workflow/<slug>/rca.md`
+- OpenSpec change: `openspec/changes/<id>/`
+- Phase log: `.claude/workflow/<slug>/phase-log.md`
+
+## Open Items
+<residual open items, or "none">
+
+---
+🤖 Generated with [Claude Code](https://claude.com/claude-code) \`/fix\`
+PREOF
+)"
+```
+
+Report to the user:
 
 ```text
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ✅ Fix complete — <symptom description>
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-Branch: fix/<slug>
-Phase log: .claude/workflow/<slug>/phase-log.md
+PR: <URL from gh pr create>
+Branch: fix/<slug>  (worktree: $WORKTREE_PATH)
+Phase log: $WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md
 
 Root cause: <file:line> — <one-line mechanism>
 Fix surface: <N files changed>
@@ -294,10 +343,9 @@ OpenSpec change: <id>
   Tasks:    openspec/changes/<id>/tasks.md
   Validate: <clean | issues remaining>
 
-To merge:
-  git checkout main && git merge --no-ff fix/<slug>
-
-After merge:
+After the PR is merged on GitHub:
+  git worktree remove "$WORKTREE_PATH"
+  git branch -d fix/<slug>
   openspec archive <id> --yes
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 ```
@@ -317,7 +365,7 @@ Pass `SLUG: <slug> RESUME_FROM: <point>` as the argument to resume. Valid resume
 | `Testing` | Phases 1–3 | Phase 4 (Testing) |
 
 When resuming:
-- Load `.claude/workflow/<slug>/phase-log.md` to reconstruct state.
+- Load `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md` to reconstruct state.
 - For `Planning` or later, load the Fix-Investigate handoff from the phase log.
 - For `Development` or later, load the Planning handoff from the phase log.
 - For `Testing`, load the Development handoff from the phase log.
