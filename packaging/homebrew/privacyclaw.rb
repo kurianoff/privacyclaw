@@ -111,6 +111,23 @@ class Privacyclaw < Formula
     sha256 "f0fa19c6845758ab08074a0cfa8b7aecb71c999ca73d62883bc25cc018c4e548"
   end
 
+  # pydantic-core: platform-specific binary wheels (requires rustc to build from sdist).
+  # x86_64 fallback: no macosx_11_0_x86_64 wheel available; using macosx_10_12_x86_64 (next lowest tag).
+  on_macos do
+    on_arm do
+      resource "pydantic-core" do
+        url "https://files.pythonhosted.org/packages/2f/b4/18092255f64392d1604cef8751a552f4c1fa0816a8b2f7120ad9896d2ecd/pydantic_core-2.45.0-cp311-cp311-macosx_11_0_arm64.whl"
+        sha256 "2d4a9ad579a2a3c5f64f0a610fb2aa70a40abd9fffb63de5c6811bb276f1ed66"
+      end
+    end
+    on_intel do
+      resource "pydantic-core" do
+        url "https://files.pythonhosted.org/packages/ca/a3/3b8822ca7abbaf829cea6c802f705d0f6cf0703cca2498255ef40906f064/pydantic_core-2.45.0-cp311-cp311-macosx_10_12_x86_64.whl"
+        sha256 "13078af99248af0430ec752ac3f5fed1477ee8cd833b4f55563c458b9d72d9bf"
+      end
+    end
+  end
+
   # ── Install ───────────────────────────────────────────────────────────────
 
   def install
