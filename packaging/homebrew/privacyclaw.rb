@@ -1,17 +1,19 @@
 # typed: false
 # frozen_string_literal: true
 
+# SOURCE OF TRUTH: This file is the authoritative formula.
+# The tap formula at homebrew-privacyclaw/Formula/privacyclaw.rb is
+# GENERATED from this file via: make tap-sync-formula SHA256=<hash>
+# Do not edit the tap formula directly.
+#
 # Homebrew formula for privacyclaw — a local MITM privacy proxy for LLM API traffic.
 #
 # To publish a real release:
-#   1. Build the universal binary:
-#        make release   (produces dist/privacyclaw)
-#   2. Package it:
-#        tar czf privacyclaw-VERSION-universal-macos.tar.gz -C dist privacyclaw
-#   3. Compute SHA-256:
-#        shasum -a 256 privacyclaw-VERSION-universal-macos.tar.gz
-#   4. Update the `url` and `sha256` fields below.
-#   5. Submit to a tap or open a PR against homebrew-core.
+#   1. Build universal binary + tarball:
+#        make tarball   (produces /tmp/privacyclaw-VERSION-universal-apple-darwin.tar.gz)
+#   2. Upload the tarball to GitHub Release v<VERSION>
+#   3. Sync the tap formula with the real SHA-256:
+#        make tap-sync-formula SHA256=<sha256-from-step-1>
 #
 # To install from this formula directly (before publishing):
 #   brew install --formula ./packaging/homebrew/privacyclaw.rb
@@ -22,17 +24,16 @@ class Privacyclaw < Formula
 
   # ── Pre-built universal binary (aarch64 + x86_64 via lipo) ────────────────
   #
-  # Replace the placeholder URL and sha256 with the values from the actual
-  # GitHub release once the binary is published.
+  # The tarball bundles privacyclaw, llama-server, and privacyclaw-slm-sidecar.
+  # Replace the placeholder SHA-256 via: make tap-sync-formula SHA256=<hash>
   #
   on_macos do
-    url "https://github.com/kurianoff/privacyclaw/releases/download/v#{version}/privacyclaw-#{version}-universal-macos.tar.gz"
+    url "https://github.com/kurianoff/kladovka/releases/download/v#{version}/privacyclaw-#{version}-universal-apple-darwin.tar.gz"
     sha256 "PLACEHOLDER_SHA256_REPLACE_BEFORE_PUBLISHING"
   end
 
   # ── Dependencies ──────────────────────────────────────────────────────────
-  # llama.cpp provides llama-server for Tier 3 standalone PII protection.
-  depends_on "llama.cpp"
+  # llama-server is bundled directly in the tarball — no depends_on "llama.cpp" needed.
   depends_on "python@3.11"
 
   # ── Python sidecar pip resources ──────────────────────────────────────────
@@ -132,6 +133,7 @@ class Privacyclaw < Formula
 
   def install
     bin.install "privacyclaw"
+    bin.install "llama-server"
     virtualenv_install_with_resources using: "python@3.11"
     bin.install "privacyclaw-slm-sidecar"
     inreplace bin/"privacyclaw-slm-sidecar",
