@@ -2,9 +2,19 @@ VERSION := $(shell cargo metadata --no-deps --format-version 1 | python3 -c "imp
 ARCH    := $(shell uname -m)
 DIST    := dist
 
-.PHONY: all build release test clean app pkg dmg tap-update-version tap-audit brew-package
+# Pinned llama.cpp release to bundle with the tarball.
+# To update: change this tag, then run: make tarball
+LLAMA_CPP_TAG ?= b5000
+
+# llama.cpp GitHub release asset base URL
+LLAMA_RELEASE_BASE := https://github.com/ggerganov/llama.cpp/releases/download/$(LLAMA_CPP_TAG)
+
+.PHONY: all build release test clean app pkg dmg tap-update-version tap-audit brew-package print-llama-tag
 
 all: build
+
+print-llama-tag:
+	@echo $(LLAMA_CPP_TAG)
 
 # ── Development build ─────────────────────────────────────────────────────────
 
