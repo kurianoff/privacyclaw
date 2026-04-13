@@ -9,7 +9,7 @@ LLAMA_CPP_TAG ?= b5000
 # llama.cpp GitHub release asset base URL
 LLAMA_RELEASE_BASE := https://github.com/ggerganov/llama.cpp/releases/download/$(LLAMA_CPP_TAG)
 
-.PHONY: all build release test clean app pkg dmg tap-update-version tap-audit brew-package print-llama-tag
+.PHONY: all build release test clean app pkg dmg tap-update-version tap-sync-formula tap-audit brew-package print-llama-tag
 
 all: build
 
@@ -202,6 +202,18 @@ brew-package:
 tap-update-version:
 	sed -i '' 's/version "[0-9]*\.[0-9]*\.[0-9]*"/version "$(VERSION)"/' \
 	  homebrew-privacyclaw/Casks/privacyclaw-app.rb
+
+# Sync the tap formula from the source formula.
+# Run after publishing a release tarball:
+#   make tap-sync-formula SHA256=<sha256-of-tarball>
+tap-sync-formula:
+	@[ -n "$(SHA256)" ] || (echo "Usage: make tap-sync-formula SHA256=<hash>"; exit 1)
+	cp packaging/homebrew/privacyclaw.rb homebrew-privacyclaw/Formula/privacyclaw.rb
+	sed -i '' \
+	    -e 's|PLACEHOLDER_SHA256_REPLACE_BEFORE_PUBLISHING|$(SHA256)|g' \
+	    -e 's|privacyclaw-.*-universal-apple-darwin\.tar\.gz|privacyclaw-$(VERSION)-universal-apple-darwin.tar.gz|g' \
+	    homebrew-privacyclaw/Formula/privacyclaw.rb
+	@echo "Tap formula updated. Review and commit homebrew-privacyclaw/Formula/privacyclaw.rb"
 
 # Validate tap formula syntax (requires brew).
 tap-audit:
