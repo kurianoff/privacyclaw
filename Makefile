@@ -139,9 +139,46 @@ dmg: app
 
 # ── Homebrew tarball + SHA ────────────────────────────────────────────────────
 
-TARBALL := /tmp/privacyclaw-$(VERSION)-arm64-apple-darwin.tar.gz
+TARBALL := /tmp/privacyclaw-$(VERSION)-universal-apple-darwin.tar.gz
 
+.PHONY: tarball
+tarball: release
+	mkdir -p $(DIST)/llama-tmp
+	curl -fL "$(LLAMA_RELEASE_BASE)/llama-$(LLAMA_CPP_TAG)-bin-macos-arm64.zip" \
+	    -o $(DIST)/llama-tmp/llama-arm64.zip
+	unzip -o $(DIST)/llama-tmp/llama-arm64.zip -d $(DIST)/llama-tmp/arm64/
+	curl -fL "$(LLAMA_RELEASE_BASE)/llama-$(LLAMA_CPP_TAG)-bin-macos-x86_64.zip" \
+	    -o $(DIST)/llama-tmp/llama-x86.zip
+	unzip -o $(DIST)/llama-tmp/llama-x86.zip -d $(DIST)/llama-tmp/x86_64/
+	@# Verify exactly one llama-server extracted per arch
+	@ARM_COUNT=$$(find $(DIST)/llama-tmp/arm64 -name 'llama-server' -type f | wc -l | tr -d ' '); \
+	 X86_COUNT=$$(find $(DIST)/llama-tmp/x86_64 -name 'llama-server' -type f | wc -l | tr -d ' '); \
+	 [ "$$ARM_COUNT" = "1" ] || (echo "ERROR: expected 1 llama-server in arm64 zip, found $$ARM_COUNT"; exit 1); \
+	 [ "$$X86_COUNT" = "1" ] || (echo "ERROR: expected 1 llama-server in x86_64 zip, found $$X86_COUNT"; exit 1)
+	lipo -create \
+	    $$(find $(DIST)/llama-tmp/arm64 -name 'llama-server' -type f) \
+	    $$(find $(DIST)/llama-tmp/x86_64 -name 'llama-server' -type f) \
+	    -output $(DIST)/llama-server
+	@# Verify universal binary
+	@file $(DIST)/llama-server | grep -q 'universal binary' || \
+	    (echo "ERROR: llama-server is not a universal binary"; exit 1)
+	chmod +x $(DIST)/llama-server
+	cp packaging/privacyclaw-slm-sidecar $(DIST)/privacyclaw-slm-sidecar
+	chmod +x $(DIST)/privacyclaw-slm-sidecar
+	tar -czf $(TARBALL) -C $(DIST) privacyclaw llama-server privacyclaw-slm-sidecar
+	@echo "Tarball: $(TARBALL)"
+	@echo "SHA256:  $$(shasum -a 256 $(TARBALL) | awk '{print $$1}')"
+	@echo ""
+	@echo "Next steps:"
+	@echo "  1. Upload $(TARBALL) to GitHub Release v$(VERSION)"
+	@echo "  2. Run: make tap-sync-formula SHA256=<above>"
+
+# DEPRECATED: use `make tarball` instead.
+# brew-package produces a single-arch arm64-only tarball of privacyclaw only.
+# It is retained for backward compatibility and will be removed in a future
+# major version.
 brew-package:
+	@echo "DEPRECATION NOTICE: brew-package is deprecated. Use 'make tarball' instead."
 	cargo build --release --target aarch64-apple-darwin
 	mkdir -p $(DIST)
 	cp target/aarch64-apple-darwin/release/privacyclaw $(DIST)/privacyclaw
