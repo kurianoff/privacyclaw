@@ -102,6 +102,13 @@ _pkg-layout:
 	else \
 	  echo "WARN: llama-server not found at $(LLAMA_SERVER) — Tier 3 PII will not be bundled"; \
 	fi
+	@if [ -f "packaging/privacyclaw-slm-sidecar" ]; then \
+	  cp packaging/privacyclaw-slm-sidecar $(SHARE_DIR)/privacyclaw-slm-sidecar; \
+	  chmod +x $(SHARE_DIR)/privacyclaw-slm-sidecar; \
+	  echo "Bundled privacyclaw-slm-sidecar"; \
+	else \
+	  echo "WARN: privacyclaw-slm-sidecar not found — Tier 3 /replace endpoint unavailable"; \
+	fi
 	cp packaging/postinstall $(PKG_SCRIPTS)/postinstall
 	cp packaging/preremove   $(PKG_SCRIPTS)/preremove
 	chmod +x $(PKG_SCRIPTS)/postinstall $(PKG_SCRIPTS)/preremove
