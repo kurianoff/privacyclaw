@@ -33,7 +33,7 @@ class Privacyclaw < Formula
   end
 
   # ── Dependencies ──────────────────────────────────────────────────────────
-  # llama-server is bundled directly in the tarball — no depends_on "llama.cpp" needed.
+  # llama-server is bundled directly in the tarball (no llama.cpp dependency needed).
   depends_on "python@3.11"
 
   # ── Python sidecar pip resources ──────────────────────────────────────────
