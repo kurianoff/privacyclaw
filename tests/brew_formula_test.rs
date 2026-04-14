@@ -5,11 +5,8 @@
 use std::path::PathBuf;
 
 fn tap_root() -> PathBuf {
-    // From privacyclaw/ we go up one level to find homebrew-privacyclaw/
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .unwrap()
-        .join("homebrew-privacyclaw")
+    // homebrew-privacyclaw/ lives at the repo root alongside Cargo.toml
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("homebrew-privacyclaw")
 }
 
 /// §10.T1: privacyclaw.rb formula exists and has required fields.
@@ -26,6 +23,66 @@ fn formula_privacyclaw_rb_exists_and_valid() {
     assert!(content.contains("service do"), "must have service block for brew services");
     assert!(content.contains("privacyclaw"), "must reference the privacyclaw binary");
     assert!(content.contains("test do"), "must have test block");
+
+    // T4: source formula must not depend on llama.cpp
+    let source = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("packaging/homebrew/privacyclaw.rb");
+    let source_content = std::fs::read_to_string(&source).unwrap();
+    assert!(
+        !source_content.contains(r#"depends_on "llama.cpp""#),
+        "source formula must not declare depends_on \"llama.cpp\""
+    );
+}
+
+/// Tap formula must not have depends_on "llama.cpp" (bundled directly now).
+#[test]
+fn tap_formula_has_no_llama_cpp_dependency() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    assert!(
+        !content.contains(r#"depends_on "llama.cpp""#),
+        "tap formula must not declare depends_on \"llama.cpp\""
+    );
+}
+
+/// Tap formula must install llama-server directly from the tarball.
+#[test]
+fn tap_formula_installs_llama_server() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    assert!(
+        content.contains(r#"bin.install "llama-server""#),
+        "tap formula must include bin.install \"llama-server\""
+    );
+}
+
+/// Tap formula URL must use #{version} interpolation, not a hardcoded version string.
+/// RC1-1: guards against the tap formula having a literal version in the tarball URL.
+#[test]
+fn tap_formula_url_uses_version_interpolation() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    // The URL must contain #{version} for the tarball filename, not a hardcoded semver.
+    assert!(
+        content.contains(r#"privacyclaw-#{version}-universal-apple-darwin.tar.gz"#),
+        "tap formula URL must use #{{version}} interpolation for the tarball filename, not a hardcoded version"
+    );
+}
+
+/// Tap formula must not claim to be the source of truth (it is a generated file).
+/// RC1-2: guards against the misleading "SOURCE OF TRUTH" header in the generated tap formula.
+#[test]
+fn tap_formula_header_identifies_as_generated() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    assert!(
+        !content.contains("SOURCE OF TRUTH"),
+        "tap formula must not contain 'SOURCE OF TRUTH' — it is a generated file"
+    );
+    assert!(
+        content.contains("GENERATED FILE"),
+        "tap formula must contain 'GENERATED FILE' header to signal it should not be edited directly"
+    );
 }
 
 /// §10.T2: privacyclaw-app.rb cask exists and has required fields.

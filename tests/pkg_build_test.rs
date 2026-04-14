@@ -53,3 +53,40 @@ fn dist_dir_referenced_in_makefile() {
     assert!(content.contains(".pkg"), "Makefile must produce a .pkg file");
     assert!(content.contains("dist/") || content.contains("$(DIST)"), "output must go to dist/ directory");
 }
+
+#[test]
+fn makefile_pkg_layout_copies_sidecar() {
+    let makefile = project_root().join("Makefile");
+    let content = std::fs::read_to_string(&makefile).unwrap();
+    assert!(
+        content.contains("privacyclaw-slm-sidecar"),
+        "Makefile _pkg-layout must copy privacyclaw-slm-sidecar to SHARE_DIR"
+    );
+}
+
+#[test]
+fn makefile_has_tarball_target() {
+    let makefile = project_root().join("Makefile");
+    let content = std::fs::read_to_string(&makefile).unwrap();
+    assert!(content.contains("tarball:"), "Makefile must have tarball: target");
+    assert!(content.contains("LLAMA_CPP_TAG"), "Makefile must declare LLAMA_CPP_TAG");
+    assert!(content.contains("print-llama-tag"), "Makefile must have print-llama-tag target");
+    assert!(content.contains("tap-sync-formula"), "Makefile must have tap-sync-formula target");
+}
+
+/// Deprecated brew-package must use its own tarball variable, not the universal TARBALL.
+/// RC1-3: guards against brew-package silently overwriting the universal tarball with arm64-only content.
+#[test]
+fn makefile_brew_package_uses_separate_tarball_variable() {
+    let makefile = project_root().join("Makefile");
+    let content = std::fs::read_to_string(&makefile).unwrap();
+    // BREW_PACKAGE_TARBALL must be defined and use the arm64 filename
+    assert!(
+        content.contains("BREW_PACKAGE_TARBALL"),
+        "Makefile must define BREW_PACKAGE_TARBALL for the deprecated brew-package target"
+    );
+    assert!(
+        content.contains("arm64-apple-darwin.tar.gz"),
+        "BREW_PACKAGE_TARBALL must use the arm64 filename (not universal)"
+    );
+}
