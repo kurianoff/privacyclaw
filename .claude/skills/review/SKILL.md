@@ -317,12 +317,44 @@ If `TeamCreate` was never called (sequential fallback path), skip this section.
 
 ---
 
-## Phase completion
+## Phase completion and PR merge
 
 Phase 5 is complete when:
 - Contrarian declares the PR **approved** (zero VALID findings in the latest cycle)
 - All per-cycle implementation worktrees have been merged and removed
 - The feature branch has been pushed to origin with all fixes
+
+### Merge the PR
+
+After approval, merge the PR immediately — do not wait for the user:
+
+```bash
+gh pr merge <pr_url> --squash --delete-branch \
+  --subject "feat(<slug>): <feature description>" \
+  --body "Merged after review approval (cycle <N>). See review-addon-*.md for finding history."
+```
+
+Use `--squash` to keep main history linear. If the repository enforces merge
+commits (branch protection rule: "Require a linear history" not set), use
+`--merge` instead. If `gh pr merge` fails due to branch protection requiring
+a human approver, report the PR URL to the user and ask them to merge manually —
+do not loop or retry.
+
+After a successful merge, clean up the worktree:
+
+```bash
+git -C "<WORKTREE>" checkout main
+git -C "<WORKTREE>" pull origin main
+git worktree remove "<WORKTREE>" --force
+git branch -d feature/<slug>
+```
+
+Report to the user:
+- The PR URL and merge commit SHA
+- Review summary: N cycle(s), X VALID findings fixed, Y INVALID discarded
+- Worktree cleaned up
+
+### Phase Handoff
 
 Produce a **Phase Handoff**:
 
@@ -339,12 +371,7 @@ Decisions:
   - Total VALID findings addressed: <count>
   - Total INVALID findings discarded: <count>
   - <notable decisions made during implementation of findings>
-For next:  PR is approved and ready to merge. The feature branch has been
-           pushed. All review findings are recorded in review-addon-*.md files
-           in the OpenSpec change directory.
+For next:  PR merged to main. Worktree removed. Feature complete.
 Open:      <unresolved findings or user questions, or "none">
 === END HANDOFF ===
 ```
-
-When the orchestrator receives this handoff with `Status: complete`, it
-reports to the user that the PR is approved and ready to merge.

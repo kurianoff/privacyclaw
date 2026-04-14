@@ -301,15 +301,12 @@ Wait for the Phase Handoff. Append to phase log.
 If the handoff `Status` is `blocked`, surface the unresolved findings to the
 user and wait for guidance before declaring the workflow complete.
 
-If the handoff `Status` is `complete` (PR approved), tell the user:
+If the handoff `Status` is `complete` (PR merged), tell the user:
 
-> "✅ PR approved by the Review Group. The PR at `<pr_url>` is ready to merge."
+> "✅ PR approved and merged by the Review Group. Feature complete."
 
-**After the PR is merged on GitHub**, clean up the worktree:
-```bash
-git worktree remove "$WORKTREE_PATH" --force
-git branch -d feature/<slug>
-```
+The review skill merges the PR and removes the worktree automatically upon
+approval. No further action is needed from the orchestrator.
 
 ---
 
