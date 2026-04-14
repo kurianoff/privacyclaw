@@ -4,7 +4,7 @@ DIST    := dist
 
 # Pinned llama.cpp release to bundle with the tarball.
 # To update: change this tag, then run: make tarball
-LLAMA_CPP_TAG ?= b5000
+LLAMA_CPP_TAG ?= b8786
 
 # llama.cpp GitHub release asset base URL
 LLAMA_RELEASE_BASE := https://github.com/ggerganov/llama.cpp/releases/download/$(LLAMA_CPP_TAG)
