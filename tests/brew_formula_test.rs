@@ -56,6 +56,35 @@ fn tap_formula_installs_llama_server() {
     );
 }
 
+/// Tap formula URL must use #{version} interpolation, not a hardcoded version string.
+/// RC1-1: guards against the tap formula having a literal version in the tarball URL.
+#[test]
+fn tap_formula_url_uses_version_interpolation() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    // The URL must contain #{version} for the tarball filename, not a hardcoded semver.
+    assert!(
+        content.contains(r#"privacyclaw-#{version}-universal-apple-darwin.tar.gz"#),
+        "tap formula URL must use #{{version}} interpolation for the tarball filename, not a hardcoded version"
+    );
+}
+
+/// Tap formula must not claim to be the source of truth (it is a generated file).
+/// RC1-2: guards against the misleading "SOURCE OF TRUTH" header in the generated tap formula.
+#[test]
+fn tap_formula_header_identifies_as_generated() {
+    let formula = tap_root().join("Formula/privacyclaw.rb");
+    let content = std::fs::read_to_string(&formula).unwrap();
+    assert!(
+        !content.contains("SOURCE OF TRUTH"),
+        "tap formula must not contain 'SOURCE OF TRUTH' — it is a generated file"
+    );
+    assert!(
+        content.contains("GENERATED FILE"),
+        "tap formula must contain 'GENERATED FILE' header to signal it should not be edited directly"
+    );
+}
+
 /// §10.T2: privacyclaw-app.rb cask exists and has required fields.
 #[test]
 fn cask_privacyclaw_app_rb_exists_and_valid() {
