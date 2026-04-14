@@ -1,10 +1,9 @@
 # typed: false
 # frozen_string_literal: true
 
-# SOURCE OF TRUTH: This file is the authoritative formula.
-# The tap formula at homebrew-privacyclaw/Formula/privacyclaw.rb is
-# GENERATED from this file via: make tap-sync-formula SHA256=<hash>
-# Do not edit the tap formula directly.
+# GENERATED FILE — do not edit directly.
+# Source of truth: packaging/homebrew/privacyclaw.rb
+# Regenerate via: make tap-sync-formula SHA256=<hash>
 #
 # Homebrew formula for privacyclaw — a local MITM privacy proxy for LLM API traffic.
 #
@@ -28,7 +27,7 @@ class Privacyclaw < Formula
   # Replace the placeholder SHA-256 via: make tap-sync-formula SHA256=<hash>
   #
   on_macos do
-    url "https://github.com/kurianoff/kladovka/releases/download/v#{version}/privacyclaw-0.3.0-universal-apple-darwin.tar.gz"
+    url "https://github.com/kurianoff/kladovka/releases/download/v#{version}/privacyclaw-#{version}-universal-apple-darwin.tar.gz"
     sha256 "PLACEHOLDER_SHA256_REPLACE_BEFORE_PUBLISHING"
   end
 

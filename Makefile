@@ -184,14 +184,16 @@ tarball: release
 # brew-package produces a single-arch arm64-only tarball of privacyclaw only.
 # It is retained for backward compatibility and will be removed in a future
 # major version.
+BREW_PACKAGE_TARBALL := /tmp/privacyclaw-$(VERSION)-arm64-apple-darwin.tar.gz
+
 brew-package:
 	@echo "DEPRECATION NOTICE: brew-package is deprecated. Use 'make tarball' instead."
 	cargo build --release --target aarch64-apple-darwin
 	mkdir -p $(DIST)
 	cp target/aarch64-apple-darwin/release/privacyclaw $(DIST)/privacyclaw
-	tar -czf $(TARBALL) -C $(DIST) privacyclaw
-	@echo "Tarball: $(TARBALL)"
-	@echo "SHA256:  $$(shasum -a 256 $(TARBALL) | awk '{print $$1}')"
+	tar -czf $(BREW_PACKAGE_TARBALL) -C $(DIST) privacyclaw
+	@echo "Tarball: $(BREW_PACKAGE_TARBALL)"
+	@echo "SHA256:  $$(shasum -a 256 $(BREW_PACKAGE_TARBALL) | awk '{print $$1}')"
 	@echo "Update homebrew-privacyclaw/Formula/privacyclaw.rb with the SHA above."
 
 # ── Homebrew tap files ────────────────────────────────────────────────────────
@@ -212,6 +214,10 @@ tap-sync-formula:
 	sed -i '' \
 	    -e 's|PLACEHOLDER_SHA256_REPLACE_BEFORE_PUBLISHING|$(SHA256)|g' \
 	    -e 's|privacyclaw-.*-universal-apple-darwin\.tar\.gz|privacyclaw-$(VERSION)-universal-apple-darwin.tar.gz|g' \
+	    -e 's|# SOURCE OF TRUTH: This file is the authoritative formula\.|# GENERATED FILE — do not edit directly.|g' \
+	    -e 's|# The tap formula at homebrew-privacyclaw/Formula/privacyclaw\.rb is|# Source of truth: packaging/homebrew/privacyclaw.rb|g' \
+	    -e 's|# GENERATED from this file via: make tap-sync-formula SHA256=<hash>|# Regenerate via: make tap-sync-formula SHA256=<hash>|g' \
+	    -e '/# Do not edit the tap formula directly\./d' \
 	    homebrew-privacyclaw/Formula/privacyclaw.rb
 	@echo "Tap formula updated. Review and commit homebrew-privacyclaw/Formula/privacyclaw.rb"
 
