@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Orchestrate the full 4-phase feature development workflow (Design → Planning → Development → Testing). Invoke with a plain-English feature description; the orchestrator passes compact handoffs between phases and surfaces decisions that require user input.
+description: Orchestrate the full 5-phase feature development workflow (Design → Planning → Development → Testing → Review). Invoke with a plain-English feature description; the orchestrator passes compact handoffs between phases and surfaces decisions that require user input.
 argument-hint: <feature description>
 allowed-tools: Bash, Skill, Read, Write
 ---
@@ -11,6 +11,13 @@ You are the **workflow orchestrator**. Your job is narrow: set up git, invoke
 each phase skill in order, pass compact handoffs between them, maintain the
 Phase Log, and surface any blockers to the user. You do not implement, design,
 or review anything yourself.
+
+The full workflow is:
+**Design → Planning → Development → Testing → PR creation → Review**
+
+Review (Phase 5) runs after the PR is created and cycles until the Review
+Group (Investigator + Contrarian) approves the PR. Only after approval is the
+PR ready for the user to merge.
 
 Feature request: **$ARGUMENTS**
 
@@ -31,9 +38,9 @@ This orchestrator was designed with the following constraints in mind:
   OpenSpec files) let subsequent phases read what they need directly.
 
 - **Independent phase invocability.** Each phase skill (`/design`,
-  `/plan`, `/develop`, `/test`) can be
+  `/plan`, `/develop`, `/test`, `/review`) can be
   invoked standalone. This supports resuming a workflow mid-phase, re-running
-  testing after a hotfix, or running design exploration without committing to
+  review after a hotfix, or running design exploration without committing to
   full implementation.
 
 - **Teams first, Agent fallback.** Phase skills attempt `TeamCreate` +
@@ -51,7 +58,7 @@ Phase Log.
 
 ```text
 === PHASE HANDOFF ===
-Phase:     <Design | Planning | Development | Testing>
+Phase:     <Design | Planning | Development | Testing | Review>
 Status:    <complete | blocked — reason>
 Feature:   <original feature description>
 Branch:    feature/<slug>
@@ -115,9 +122,14 @@ Wait for an explicit "yes" / "proceed" / "continue" before invoking the
 next phase. This gives the user a chance to redirect before development
 work begins.
 
-After **Phase 3 (Development)** and **Phase 4 (Testing)**, post the
-progress report and proceed automatically (no pause needed — the expensive
-work is already done by that point).
+After **Phase 3 (Development)**, **Phase 4 (Testing)**, and **Phase 5 (Review)**,
+post the progress report and proceed automatically (no pause needed — the
+expensive work is already done by that point).
+
+For Phase 5 (Review): if the Review phase returns `Status: complete` (PR
+approved), report the approval and tell the user the PR is ready to merge.
+If it returns `Status: blocked`, surface the unresolved findings and wait for
+user guidance.
 
 ---
 
@@ -211,7 +223,7 @@ Skill("test", "<develop handoff content>\nWORKTREE: <worktree_path>")
 
 Wait for the Phase Handoff. Append to phase log.
 
-**Post the Phase 4 progress report.** Proceed automatically to final merge.
+**Post the Phase 4 progress report.** Proceed automatically to PR creation.
 
 ---
 
@@ -235,7 +247,7 @@ gh pr create \
 <2–3 sentences describing what was built, drawn from the Design phase description>
 
 ## Workflow
-Implemented via `/implement` (Design → Planning → Development → Testing).
+Implemented via `/implement` (Design → Planning → Development → Testing → Review).
 
 ## Key Decisions
 <bullet list extracted from the Decisions fields across all four Phase Handoffs>
@@ -258,15 +270,44 @@ PREOF
 )"
 ```
 
-Report to the user:
-- PR URL (printed by `gh pr create`)
-- Branch: `feature/<slug>` in worktree at `$WORKTREE_PATH`
-- Phase log: `$WORKTREE_PATH/.claude/workflow/<slug>/phase-log.md`
-- Any residual open items from the Phase Log
+Store the PR URL — it is passed to Phase 5 (Review). Proceed automatically to Review.
+
+---
+
+## Step 7 — Invoke Phase 5: Review
+
+Tell the user: "Starting Phase 5 — Review. Investigator and Contrarian will
+examine the PR against the design spec, then the implementation group will fix
+any valid findings."
+
+Extract from the phase log:
+- `design_doc` path (from the Design phase handoff Artifacts)
+- `openspec_id` (from the Planning phase handoff Decisions)
+
+Pass the Testing handoff plus the PR URL and these extracted fields:
+
+```text
+Skill("review", "<testing handoff content>
+PR_URL: <pr_url>
+design_doc: <design_doc_path>
+openspec_id: <openspec_id>
+WORKTREE: <worktree_path>")
+```
+
+Wait for the Phase Handoff. Append to phase log.
+
+**Post the Phase 5 progress report.**
+
+If the handoff `Status` is `blocked`, surface the unresolved findings to the
+user and wait for guidance before declaring the workflow complete.
+
+If the handoff `Status` is `complete` (PR approved), tell the user:
+
+> "✅ PR approved by the Review Group. The PR at `<pr_url>` is ready to merge."
 
 **After the PR is merged on GitHub**, clean up the worktree:
 ```bash
-git worktree remove "$WORKTREE_PATH"
+git worktree remove "$WORKTREE_PATH" --force
 git branch -d feature/<slug>
 ```
 
@@ -281,7 +322,10 @@ git branch -d feature/<slug>
   The phase log is for your records; phase skills receive only what they need.
 - **Architect has final say** on design and scope decisions.
   **PM has final say** on task structure decisions.
+- **Contrarian has final say** on which review findings are VALID (Phase 5).
 - When user input is needed: state the options, the tradeoffs, and your
   recommendation clearly. Then wait.
 - If a phase skill returns a malformed or missing handoff, ask the user whether
   to re-invoke the phase or proceed manually.
+- The Review phase (Phase 5) operates exclusively inside the worktree — it
+  never touches the main repository working tree. This rule is absolute.
