@@ -13,7 +13,7 @@ The repository currently has a single workflow (`release.yml`) that fires only o
 - Add `cargo-deny` config (`deny.toml`) with license allowlist and advisory database check
 - Optionally add `cargo-audit` as a separate scheduled weekly job for advisory scanning
 - Cache Cargo registry and build artifacts using `actions/cache@v4` (pattern already exists in release.yml)
-- Pin action versions (`actions/checkout@v4`, `dtolnay/rust-toolchain@stable`)
+- Pin action versions (`actions/checkout@v5` — v5 is current as of 2025/2026, supersedes v4; `dtolnay/rust-toolchain@stable`)
 
 ## Risks
 
